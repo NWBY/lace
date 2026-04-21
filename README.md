@@ -21,6 +21,8 @@ Implemented so far:
 - builtin primitive/generic type model and stdlib signatures
 - core type checking for declarations, calls, returns, and struct initialization
 - `Result`/`Option` semantics, exhaustive `match`, and checked `bind`
+- manifest and lockfile parse/serialize support
+- `lace init` and `lace new` project scaffolding
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
@@ -28,8 +30,8 @@ Implemented so far:
 
 In progress next:
 
+- dependency resolution and fetch
 - exported type manifests
-- dependency and manifest workflow
 
 ## Goals
 
@@ -48,6 +50,8 @@ Implemented so far:
 
 ```sh
 zig build run -- --help
+zig build run -- init --lib
+zig build run -- new github.com/sam/sample_app
 zig build run -- fmt examples/check_demo
 zig build run -- check --json examples/check_demo
 zig build run -- diag --json examples/check_demo
@@ -59,6 +63,20 @@ Build and test the Zig implementation with:
 ```sh
 zig build
 zig build test
+```
+
+### init
+
+```sh
+zig build run -- init
+zig build run -- init --name github.com/sam/my_lib --lib
+```
+
+### new
+
+```sh
+zig build run -- new github.com/sam/my_app
+zig build run -- new github.com/sam/my_lib --lib
 ```
 
 ### fmt
@@ -99,7 +117,7 @@ src/
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, resolution, typing, and result semantics
-  pkg/            source discovery and later package helpers
+  pkg/            source discovery, manifest parsing, and scaffolding
   backend/        execution backend placeholder
 examples/         sample Lace source files
 todo/             ordered implementation roadmap
@@ -125,6 +143,7 @@ The current sequence starts with:
 11. core type checking
 12. result and option semantics
 13. CLI for fmt, check, ast, and diag
+14. manifest, lockfile, and project scaffolding
 
 ## Design Direction
 

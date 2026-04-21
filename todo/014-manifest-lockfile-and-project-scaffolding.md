@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 014: Manifest, Lockfile, and Project Scaffolding
 
 ## Goal
