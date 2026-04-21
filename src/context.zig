@@ -59,6 +59,7 @@ pub const Context = struct {
             },
             .fmt => return self.executeFmtCommand(stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
+            .new => return self.executeNewCommand(stderr, command.args),
             else => {
                 _ = command.args;
                 try stderr.print("`lace {s}` is not implemented yet.\n", .{command.kind.label()});
@@ -156,6 +157,12 @@ pub const Context = struct {
             return 0;
         }
 
+        return 1;
+    }
+
+    fn executeNewCommand(_: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        _ = args;
+        try stderr.writeAll("`lace new` is not implemented yet.\n");
         return 1;
     }
 
