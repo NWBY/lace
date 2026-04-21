@@ -1,4 +1,4 @@
-# Lace
+# Lace - Language for Agents, Canonical and Explicit
 
 Lace is a statically typed programming language for agents to write, edit, and repair.
 
