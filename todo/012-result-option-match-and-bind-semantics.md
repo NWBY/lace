@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 012: Result, Option, Match, and Bind Semantics
 
 ## Goal
