@@ -12,11 +12,11 @@ Implemented so far:
 - source file management with stable file IDs and spans
 - structured diagnostics with text and JSON rendering
 - deterministic lexer for the current Lace token set
+- parser for top-level declarations and signatures
 
 In progress next:
 
-- top-level parser
-- syntax tree types
+- statement and expression parser
 - formatter and `lace check`
 
 ## Goals
@@ -72,6 +72,7 @@ The current sequence starts with:
 2. source spans and diagnostics
 3. lexer
 4. parser for top-level declarations
+5. parser for statements and expressions
 
 ## Design Direction
 

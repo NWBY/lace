@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 004: Parser for Top-Level Declarations
 
 ## Goal

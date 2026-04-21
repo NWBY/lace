@@ -30,6 +30,10 @@ pub const Span = struct {
             .end = end,
         };
     }
+
+    pub fn slice(self: Span, input: []const u8) []const u8 {
+        return input[self.start..self.end];
+    }
 };
 
 pub const ResolvedSpan = struct {
