@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 013: CLI for `fmt`, `check`, `ast`, and `diag`
 
 ## Goal

@@ -21,13 +21,15 @@ Implemented so far:
 - builtin primitive/generic type model and stdlib signatures
 - core type checking for declarations, calls, returns, and struct initialization
 - `Result`/`Option` semantics, exhaustive `match`, and checked `bind`
-- `lace fmt <file>`
+- `lace fmt [path]`
+- `lace check [--json] [path]`
+- `lace diag [--json] [path]`
 - `lace ast --json <file>`
 
 In progress next:
 
-- check/diagnostic CLI integration
-- `lace check`
+- exported type manifests
+- dependency and manifest workflow
 
 ## Goals
 
@@ -46,7 +48,9 @@ Implemented so far:
 
 ```sh
 zig build run -- --help
-zig build run -- fmt examples/demo.lace
+zig build run -- fmt examples/check_demo
+zig build run -- check --json examples/check_demo
+zig build run -- diag --json examples/check_demo
 zig build run -- ast --json examples/demo.lace
 ```
 
@@ -63,6 +67,19 @@ The fmt command should always produce the same output for the same input providi
 
 ```sh
 zig build run -- fmt examples/demo.lace
+zig build run -- fmt examples/check_demo
+```
+
+### check
+
+```sh
+zig build run -- check --json examples/check_demo
+```
+
+### diag
+
+```sh
+zig build run -- diag --json examples/check_demo
 ```
 
 ### ast
@@ -82,7 +99,7 @@ src/
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, resolution, typing, and result semantics
-  pkg/            package system placeholder
+  pkg/            source discovery and later package helpers
   backend/        execution backend placeholder
 examples/         sample Lace source files
 todo/             ordered implementation roadmap
@@ -107,6 +124,7 @@ The current sequence starts with:
 10. builtin types and stdlib surface
 11. core type checking
 12. result and option semantics
+13. CLI for fmt, check, ast, and diag
 
 ## Design Direction
 
