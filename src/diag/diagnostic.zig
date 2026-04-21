@@ -51,6 +51,10 @@ pub const Store = struct {
         return self.items.items.len;
     }
 
+    pub fn clearRetainingCapacity(self: *Store) void {
+        self.items.clearRetainingCapacity();
+    }
+
     pub fn hasErrors(self: *const Store) bool {
         for (self.items.items) |diagnostic| {
             if (diagnostic.level == .@"error") {

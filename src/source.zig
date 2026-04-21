@@ -103,7 +103,7 @@ pub const Manager = struct {
         const owned_path = try allocator.dupe(u8, path);
         errdefer allocator.free(owned_path);
 
-        const owned_source = try std.fs.cwd().readFileAlloc(io, path, allocator, .unlimited);
+        const owned_source = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
         errdefer allocator.free(owned_source);
 
         return self.appendOwned(allocator, owned_path, owned_source);
@@ -130,6 +130,10 @@ pub const Manager = struct {
 
     pub fn getFile(self: *const Manager, file_id: FileId) *const File {
         return &self.files.items[file_id.index()];
+    }
+
+    pub fn findFileId(self: *const Manager, path: []const u8) ?FileId {
+        return self.findByPath(path);
     }
 
     pub fn resolveSpan(self: *const Manager, span: Span) ResolvedSpan {

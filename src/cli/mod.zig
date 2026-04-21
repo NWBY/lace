@@ -48,6 +48,11 @@ pub const Command = struct {
     args: []const []const u8 = &.{},
 };
 
+pub const AstOptions = struct {
+    path: []const u8,
+    json: bool,
+};
+
 pub const CommandInfo = struct {
     kind: CommandKind,
     summary: []const u8,
@@ -73,6 +78,12 @@ pub const command_list = [_]CommandInfo{
 };
 
 pub const ParseError = error{UnknownCommand};
+pub const AstOptionsError = error{
+    MissingPath,
+    MissingJsonFlag,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 
 pub fn parse(args: []const []const u8) ParseError!Command {
     if (args.len == 0) {
@@ -104,7 +115,39 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("This is the Lace v0.1 Zig scaffold. Only `--help` is implemented so far.\n");
+    try writer.writeAll("Implemented so far: `lace ast --json <file>` and `lace --help`.\n");
+}
+
+pub fn parseAstOptions(args: []const []const u8) AstOptionsError!AstOptions {
+    var path: ?[]const u8 = null;
+    var json = false;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            json = true;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+
+        if (path == null) {
+            path = arg;
+            continue;
+        }
+
+        return error.UnexpectedArgument;
+    }
+
+    if (!json) {
+        return error.MissingJsonFlag;
+    }
+
+    return .{
+        .path = path orelse return error.MissingPath,
+        .json = json,
+    };
 }
 
 test "parse defaults to help" {
@@ -119,5 +162,15 @@ test "help output lists check command" {
     try writeHelp(&output.writer);
 
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace check") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Only `--help` is implemented") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace ast --json <file>") != null);
+}
+
+test "parse ast options requires json and a path" {
+    const options = try parseAstOptions(&.{ "--json", "src/main.lace" });
+    try std.testing.expectEqualStrings("src/main.lace", options.path);
+    try std.testing.expect(options.json);
+
+    try std.testing.expectError(error.MissingJsonFlag, parseAstOptions(&.{"src/main.lace"}));
+    try std.testing.expectError(error.MissingPath, parseAstOptions(&.{"--json"}));
+    try std.testing.expectError(error.UnexpectedArgument, parseAstOptions(&.{ "--json", "a.lace", "b.lace" }));
 }

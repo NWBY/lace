@@ -1,0 +1,13 @@
+module demo;
+
+pub error AppError {
+    invalid_name,
+}
+
+fn main() -> Result<Void, AppError> {
+    let user: User = User{
+        name: "Sam",
+    };
+
+    return Ok(Void);
+}
