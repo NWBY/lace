@@ -4,6 +4,7 @@ const diag = @import("../diag/mod.zig");
 const source = @import("../source.zig");
 const syntax = @import("../syntax/mod.zig");
 const tree = @import("../syntax/tree.zig");
+const types = @import("types.zig");
 const validation = @import("validation.zig");
 
 pub const SymbolKind = enum {
@@ -31,6 +32,7 @@ pub const ImportBinding = struct {
     module_path: []const u8,
     span: source.Span,
     target_module_index: ?usize,
+    is_stdlib: bool,
 };
 
 pub const Module = struct {
@@ -143,6 +145,7 @@ fn buildModule(
         const import_path = pathText(sources, document.file_id, import_decl.path.span);
         const alias = importAlias(sources, document, import_decl);
         const target_module_index = module_path_map.get(import_path);
+        const stdlib_module = types.lookupStdlibModule(import_path);
 
         if (top_level_map.get(alias) != null or import_map.get(alias) != null) {
             try diagnostics.append(allocator, .{
@@ -154,7 +157,7 @@ fn buildModule(
             continue;
         }
 
-        if (target_module_index == null) {
+        if (target_module_index == null and stdlib_module == null) {
             try diagnostics.append(allocator, .{
                 .code = "N1003",
                 .message = "Imported module was not found",
@@ -168,6 +171,7 @@ fn buildModule(
             .module_path = import_path,
             .span = import_decl.path.span,
             .target_module_index = target_module_index,
+            .is_stdlib = stdlib_module != null,
         };
         try import_map.put(allocator, alias, .{
             .name = alias,
@@ -405,7 +409,7 @@ const Resolver = struct {
             return;
         }
 
-        if (isBuiltinName(name)) {
+        if (types.isBuiltinValueName(name)) {
             return;
         }
 
@@ -529,15 +533,6 @@ fn textAt(sources: *const source.Manager, file_id: source.FileId, span: source.S
     return span.slice(sources.getFile(file_id).source);
 }
 
-fn isBuiltinName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "Ok") or
-        std.mem.eql(u8, name, "Err") or
-        std.mem.eql(u8, name, "Some") or
-        std.mem.eql(u8, name, "None") or
-        std.mem.eql(u8, name, "Void") or
-        std.mem.eql(u8, name, "print");
-}
-
 test "resolution succeeds for a multi-file package with imports" {
     var fixture = try TestFixture.init(&.{
         .{ .path = "src/app/models/user.lace", .contents =
@@ -648,6 +643,29 @@ test "resolution reports import alias conflicts and missing modules" {
 
     _ = try resolveDocuments(fixture.arena.allocator(), &fixture.diagnostics, &fixture.sources, fixture.documents);
     try expectDiagnosticCodes(&fixture.diagnostics, &.{ "N1002", "N1003" });
+}
+
+test "resolution accepts stdlib imports" {
+    var fixture = try TestFixture.init(&.{
+        .{ .path = "src/app/demo.lace", .contents =
+            \\module app/demo;
+            \\import std/string;
+            \\import std/int;
+            \\
+            \\fn main(
+            \\    input: String,
+            \\) -> Bool {
+            \\    let port = int.parse(value: input);
+            \\    return string.contains(value: input, needle: int.to_string(value: port));
+            \\}
+        },
+    });
+    defer fixture.deinit();
+
+    const package = try resolveDocuments(fixture.arena.allocator(), &fixture.diagnostics, &fixture.sources, fixture.documents);
+    try std.testing.expectEqual(@as(usize, 0), fixture.diagnostics.count());
+    try std.testing.expect(package.modules[0].imports[0].is_stdlib);
+    try std.testing.expect(package.modules[0].imports[1].is_stdlib);
 }
 
 test "resolution reports import cycles" {
