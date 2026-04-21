@@ -16,12 +16,13 @@ Implemented so far:
 - parser for statements, expressions, match patterns, and block bodies
 - stable AST JSON output with deterministic node IDs
 - canonical formatter with deterministic rewrites
+- module path and import validation
 - `lace fmt <file>`
 - `lace ast --json <file>`
 
 In progress next:
 
-- module path and import validation
+- symbol table and name resolution
 - `lace check`
 
 ## Goals
@@ -62,7 +63,7 @@ src/
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
-  sem/            semantic analysis placeholder
+  sem/            semantic validation and later name resolution
   pkg/            package system placeholder
   backend/        execution backend placeholder
 examples/         sample Lace source files
