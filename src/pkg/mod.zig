@@ -1,6 +1,20 @@
 const std = @import("std");
 const Io = std.Io;
 
+pub const BuildInfo = @import("manifest.zig").BuildInfo;
+pub const Dependency = @import("manifest.zig").Dependency;
+pub const LockPackage = @import("manifest.zig").LockPackage;
+pub const Lockfile = @import("manifest.zig").Lockfile;
+pub const Manifest = @import("manifest.zig").Manifest;
+pub const NewPackageOptions = @import("scaffold.zig").NewPackageOptions;
+pub const ScaffoldOptions = @import("scaffold.zig").ScaffoldOptions;
+pub const initPackage = @import("scaffold.zig").initPackage;
+pub const newPackage = @import("scaffold.zig").newPackage;
+pub const parseLockfile = @import("manifest.zig").parseLockfile;
+pub const parseManifest = @import("manifest.zig").parseManifest;
+pub const renderLockfileAlloc = @import("manifest.zig").renderLockfileAlloc;
+pub const renderManifestAlloc = @import("manifest.zig").renderManifestAlloc;
+
 pub const SourceTarget = union(enum) {
     single_file: []const u8,
     package: PackageTarget,
@@ -77,4 +91,9 @@ fn collectPackageSourceFiles(
 
 test "package loader finds lace files recursively" {
     _ = collectSourceFiles;
+}
+
+test {
+    _ = @import("manifest.zig");
+    _ = @import("scaffold.zig");
 }

@@ -52,6 +52,16 @@ pub const FormatOptions = struct {
     path: ?[]const u8 = null,
 };
 
+pub const InitOptions = struct {
+    name: ?[]const u8 = null,
+    lib: bool = false,
+};
+
+pub const NewOptions = struct {
+    name: []const u8,
+    lib: bool = false,
+};
+
 pub const CheckOptions = struct {
     path: ?[]const u8 = null,
     json: bool = false,
@@ -92,6 +102,16 @@ pub const command_list = [_]CommandInfo{
 };
 
 pub const ParseError = error{UnknownCommand};
+pub const InitOptionsError = error{
+    MissingNameValue,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
+pub const NewOptionsError = error{
+    MissingName,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const FormatOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
@@ -137,7 +157,54 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace fmt`, `lace check`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fmt`, `lace check`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
+}
+
+pub fn parseInitOptions(args: []const []const u8) InitOptionsError!InitOptions {
+    var options: InitOptions = .{};
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--lib")) {
+            options.lib = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--name")) {
+            index += 1;
+            if (index >= args.len) return error.MissingNameValue;
+            options.name = args[index];
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        return error.UnexpectedArgument;
+    }
+    return options;
+}
+
+pub fn parseNewOptions(args: []const []const u8) NewOptionsError!NewOptions {
+    var name: ?[]const u8 = null;
+    var lib = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--lib")) {
+            lib = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        if (name == null) {
+            name = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+
+    return .{
+        .name = name orelse return error.MissingName,
+        .lib = lib,
+    };
 }
 
 pub fn parseFormatOptions(args: []const []const u8) FormatOptionsError!FormatOptions {
@@ -240,6 +307,31 @@ test "help output lists check command" {
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace ast --json <file>") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace diag") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fmt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace new") != null);
+}
+
+test "parse init options supports name and lib" {
+    const options = try parseInitOptions(&.{ "--name", "github.com/sam/demo", "--lib" });
+    try std.testing.expectEqualStrings("github.com/sam/demo", options.name.?);
+    try std.testing.expect(options.lib);
+
+    const default_options = try parseInitOptions(&.{});
+    try std.testing.expectEqual(@as(?[]const u8, null), default_options.name);
+    try std.testing.expect(!default_options.lib);
+
+    try std.testing.expectError(error.MissingNameValue, parseInitOptions(&.{"--name"}));
+    try std.testing.expectError(error.UnsupportedFlag, parseInitOptions(&.{"--bad"}));
+}
+
+test "parse new options requires a package name" {
+    const options = try parseNewOptions(&.{ "github.com/sam/demo", "--lib" });
+    try std.testing.expectEqualStrings("github.com/sam/demo", options.name);
+    try std.testing.expect(options.lib);
+
+    try std.testing.expectError(error.MissingName, parseNewOptions(&.{}));
+    try std.testing.expectError(error.UnexpectedArgument, parseNewOptions(&.{ "a", "b" }));
+    try std.testing.expectError(error.UnsupportedFlag, parseNewOptions(&.{"--bad"}));
 }
 
 test "parse format options requires one path" {

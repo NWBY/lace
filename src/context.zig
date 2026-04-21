@@ -59,6 +59,7 @@ pub const Context = struct {
                 try cli.writeHelp(stdout);
                 return 0;
             },
+            .init => return self.executeInitCommand(stderr, command.args),
             .fmt => return self.executeFmtCommand(stderr, command.args),
             .check => return self.executeCheckCommand(stdout, stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
@@ -272,10 +273,70 @@ pub const Context = struct {
         return if (diagnostics.count() == 0) 0 else 1;
     }
 
-    fn executeNewCommand(_: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
-        _ = args;
-        try stderr.writeAll("`lace new` is not implemented yet.\n");
-        return 1;
+    fn executeInitCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseInitOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace init [--name <package>] [--lib]\n");
+            switch (err) {
+                error.MissingNameValue => try stderr.writeAll("`lace init --name` requires a package name.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace init` only accepts flags.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace init` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace init` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_name = options.name orelse try defaultInitPackageName(arena, io);
+        pkg.initPackage(arena, io, std.Io.Dir.cwd(), .{
+            .package_name = package_name,
+            .lib = options.lib,
+        }) catch |err| {
+            try stderr.print("Failed to initialize package: {t}\n", .{err});
+            return 1;
+        };
+
+        return 0;
+    }
+
+    fn executeNewCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseNewOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace new <package> [--lib]\n");
+            switch (err) {
+                error.MissingName => try stderr.writeAll("`lace new` requires a package name.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace new` accepts one package name.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace new` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace new` requires process I/O.\n");
+            return 1;
+        };
+
+        _ = pkg.newPackage(arena, io, std.Io.Dir.cwd(), .{
+            .package_name = options.name,
+            .lib = options.lib,
+        }) catch |err| {
+            switch (err) {
+                error.AlreadyExists => try stderr.writeAll("Target directory already exists.\n"),
+                else => try stderr.print("Failed to create package: {t}\n", .{err}),
+            }
+            return 1;
+        };
+
+        return 0;
     }
 
     fn renderDiagnostics(self: *Context, stderr: *Io.Writer, diagnostics: *const diag.Store) !void {
@@ -337,6 +398,12 @@ pub const Context = struct {
             .paths = paths,
             .documents = try documents.toOwnedSlice(arena),
         };
+    }
+
+    fn defaultInitPackageName(allocator: std.mem.Allocator, io: Io) ![]const u8 {
+        const cwd = try std.process.currentPathAlloc(io, allocator);
+        const base = std.fs.path.basename(cwd);
+        return try std.fmt.allocPrint(allocator, "example.com/{s}", .{base});
     }
 };
 
