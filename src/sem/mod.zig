@@ -1,5 +1,6 @@
-pub const Analyzer = struct {
-    pub fn name() []const u8 {
-        return "sem";
-    }
-};
+pub const validateDocument = @import("validation.zig").validateDocument;
+pub const validateDocuments = @import("validation.zig").validateDocuments;
+
+test {
+    _ = @import("validation.zig");
+}
