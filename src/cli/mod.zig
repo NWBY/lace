@@ -48,6 +48,10 @@ pub const Command = struct {
     args: []const []const u8 = &.{},
 };
 
+pub const FormatOptions = struct {
+    path: []const u8,
+};
+
 pub const AstOptions = struct {
     path: []const u8,
     json: bool,
@@ -78,6 +82,11 @@ pub const command_list = [_]CommandInfo{
 };
 
 pub const ParseError = error{UnknownCommand};
+pub const FormatOptionsError = error{
+    MissingPath,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const AstOptionsError = error{
     MissingPath,
     MissingJsonFlag,
@@ -115,7 +124,28 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace ast --json <file>` and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace fmt <file>`, `lace ast --json <file>`, and `lace --help`.\n");
+}
+
+pub fn parseFormatOptions(args: []const []const u8) FormatOptionsError!FormatOptions {
+    var path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+
+        if (path == null) {
+            path = arg;
+            continue;
+        }
+
+        return error.UnexpectedArgument;
+    }
+
+    return .{
+        .path = path orelse return error.MissingPath,
+    };
 }
 
 pub fn parseAstOptions(args: []const []const u8) AstOptionsError!AstOptions {
@@ -163,6 +193,16 @@ test "help output lists check command" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace check") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace ast --json <file>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fmt <file>") != null);
+}
+
+test "parse format options requires one path" {
+    const options = try parseFormatOptions(&.{"src/main.lace"});
+    try std.testing.expectEqualStrings("src/main.lace", options.path);
+
+    try std.testing.expectError(error.MissingPath, parseFormatOptions(&.{}));
+    try std.testing.expectError(error.UnexpectedArgument, parseFormatOptions(&.{ "a.lace", "b.lace" }));
+    try std.testing.expectError(error.UnsupportedFlag, parseFormatOptions(&.{"--check"}));
 }
 
 test "parse ast options requires json and a path" {

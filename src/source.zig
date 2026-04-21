@@ -136,6 +136,18 @@ pub const Manager = struct {
         return self.findByPath(path);
     }
 
+    pub fn replaceSource(
+        self: *Manager,
+        allocator: std.mem.Allocator,
+        file_id: FileId,
+        new_source: []const u8,
+    ) !void {
+        const loaded_file = &self.files.items[file_id.index()];
+        allocator.free(loaded_file.source);
+        loaded_file.source = try allocator.dupe(u8, new_source);
+        try rebuildLineStarts(allocator, &loaded_file.line_starts, loaded_file.source);
+    }
+
     pub fn resolveSpan(self: *const Manager, span: Span) ResolvedSpan {
         const loaded_file = self.getFile(span.file_id);
         return .{
@@ -154,12 +166,7 @@ pub const Manager = struct {
         var line_starts: std.ArrayList(usize) = .empty;
         errdefer line_starts.deinit(allocator);
 
-        try line_starts.append(allocator, 0);
-        for (owned_source, 0..) |byte, index| {
-            if (byte == '\n') {
-                try line_starts.append(allocator, index + 1);
-            }
-        }
+        try rebuildLineStarts(allocator, &line_starts, owned_source);
 
         const file_id = FileId.fromIndex(self.files.items.len);
         try self.files.append(allocator, .{
@@ -181,6 +188,20 @@ pub const Manager = struct {
         return null;
     }
 };
+
+fn rebuildLineStarts(
+    allocator: std.mem.Allocator,
+    line_starts: *std.ArrayList(usize),
+    contents: []const u8,
+) !void {
+    line_starts.clearRetainingCapacity();
+    try line_starts.append(allocator, 0);
+    for (contents, 0..) |byte, index| {
+        if (byte == '\n') {
+            try line_starts.append(allocator, index + 1);
+        }
+    }
+}
 
 test "source manager resolves line and column positions" {
     var manager: Manager = .{};

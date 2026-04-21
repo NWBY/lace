@@ -57,6 +57,7 @@ pub const Context = struct {
                 try cli.writeHelp(stdout);
                 return 0;
             },
+            .fmt => return self.executeFmtCommand(stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             else => {
                 _ = command.args;
@@ -65,6 +66,52 @@ pub const Context = struct {
                 return 1;
             },
         }
+    }
+
+    fn executeFmtCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseFormatOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace fmt <file>\n");
+            switch (err) {
+                error.MissingPath => try stderr.writeAll("`lace fmt` requires a source file path.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace fmt` accepts exactly one source file path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace fmt` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace fmt` requires process I/O.\n");
+            return 1;
+        };
+
+        var diagnostics: diag.Store = .{};
+        const file_id = self.loadFile(options.path) catch |err| {
+            try stderr.print("Failed to load `{s}`: {t}\n", .{ options.path, err });
+            return 1;
+        };
+
+        const document = syntax.parseFile(arena, &diagnostics, self.sourceFile(file_id)) catch |err| switch (err) {
+            error.InvalidSyntax => {
+                try self.renderDiagnostics(stderr, &diagnostics);
+                return 1;
+            },
+            error.OutOfMemory => return err,
+        };
+
+        const formatted = try syntax.formatDocumentAlloc(arena, &self.files, document);
+        if (!std.mem.eql(u8, formatted, self.sourceFile(file_id).source)) {
+            try std.Io.Dir.cwd().writeFile(io, .{
+                .sub_path = options.path,
+                .data = formatted,
+            });
+            try self.files.replaceSource(self.allocator, file_id, formatted);
+        }
+
+        return 0;
     }
 
     fn executeAstCommand(

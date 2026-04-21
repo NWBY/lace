@@ -8,6 +8,5 @@ fn main() -> Result<Void, AppError> {
     let user: User = User{
         name: "Sam",
     };
-
     return Ok(Void);
 }
