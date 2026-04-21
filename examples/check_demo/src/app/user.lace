@@ -1,0 +1,13 @@
+module app/user;
+
+pub struct User {
+    name: String,
+}
+
+pub fn make(
+    name: String,
+) -> User {
+    return User{
+        name: name,
+    };
+}

@@ -112,15 +112,17 @@ fn pathText(sources: *const source.Manager, file_id: source.FileId, span: source
 }
 
 fn expectedModulePath(file_path: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, file_path, "src/")) {
-        return null;
-    }
-
     if (!std.mem.endsWith(u8, file_path, ".lace")) {
         return null;
     }
 
-    return file_path[4 .. file_path.len - 5];
+    if (std.mem.startsWith(u8, file_path, "src/")) {
+        return file_path[4 .. file_path.len - 5];
+    }
+
+    const marker = "/src/";
+    const start = std.mem.lastIndexOf(u8, file_path, marker) orelse return null;
+    return file_path[start + marker.len .. file_path.len - 5];
 }
 
 test "validation accepts a valid multi-file package" {

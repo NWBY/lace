@@ -216,6 +216,16 @@ pub fn resolveTypeRef(
     const final_name = textAt(sources, document.file_id, path_segments[path_segments.len - 1].span);
 
     if (path_segments.len == 1) {
+        if (std.mem.lastIndexOfScalar(u8, final_name, '.')) |dot_index| {
+            const alias = final_name[0..dot_index];
+            const imported_name = final_name[dot_index + 1 ..];
+            if (findImportedModulePath(sources, document, alias)) |module_path| {
+                if (findNamedType(sources, documents, module_path, imported_name, true)) |named_type| {
+                    return .{ .named = named_type };
+                }
+            }
+        }
+
         if (primitiveByName(final_name)) |primitive| {
             return .{ .primitive = primitive };
         }
@@ -479,6 +489,16 @@ fn findNamedType(
         };
     }
 
+    return null;
+}
+
+fn findImportedModulePath(sources: *const source.Manager, document: tree.Document, alias: []const u8) ?[]const u8 {
+    for (document.imports) |import_decl| {
+        const last_segment = import_decl.path.segments[import_decl.path.segments.len - 1].span;
+        if (std.mem.eql(u8, alias, textAt(sources, document.file_id, last_segment))) {
+            return textAt(sources, document.file_id, import_decl.path.span);
+        }
+    }
     return null;
 }
 

@@ -49,7 +49,17 @@ pub const Command = struct {
 };
 
 pub const FormatOptions = struct {
-    path: []const u8,
+    path: ?[]const u8 = null,
+};
+
+pub const CheckOptions = struct {
+    path: ?[]const u8 = null,
+    json: bool = false,
+};
+
+pub const DiagOptions = struct {
+    path: ?[]const u8 = null,
+    json: bool = false,
 };
 
 pub const AstOptions = struct {
@@ -83,7 +93,10 @@ pub const command_list = [_]CommandInfo{
 
 pub const ParseError = error{UnknownCommand};
 pub const FormatOptionsError = error{
-    MissingPath,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
+pub const CheckOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
 };
@@ -124,7 +137,7 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace fmt <file>`, `lace ast --json <file>`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace fmt`, `lace check`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
 }
 
 pub fn parseFormatOptions(args: []const []const u8) FormatOptionsError!FormatOptions {
@@ -144,7 +157,39 @@ pub fn parseFormatOptions(args: []const []const u8) FormatOptionsError!FormatOpt
     }
 
     return .{
-        .path = path orelse return error.MissingPath,
+        .path = path,
+    };
+}
+
+pub fn parseCheckOptions(args: []const []const u8) CheckOptionsError!CheckOptions {
+    var options: CheckOptions = .{};
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            options.json = true;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+
+        if (options.path == null) {
+            options.path = arg;
+            continue;
+        }
+
+        return error.UnexpectedArgument;
+    }
+
+    return options;
+}
+
+pub fn parseDiagOptions(args: []const []const u8) CheckOptionsError!DiagOptions {
+    const options = try parseCheckOptions(args);
+    return .{
+        .path = options.path,
+        .json = options.json,
     };
 }
 
@@ -193,16 +238,31 @@ test "help output lists check command" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace check") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace ast --json <file>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fmt <file>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace diag") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fmt") != null);
 }
 
 test "parse format options requires one path" {
     const options = try parseFormatOptions(&.{"src/main.lace"});
-    try std.testing.expectEqualStrings("src/main.lace", options.path);
+    try std.testing.expectEqualStrings("src/main.lace", options.path.?);
+    const package_options = try parseFormatOptions(&.{});
+    try std.testing.expectEqual(@as(?[]const u8, null), package_options.path);
 
-    try std.testing.expectError(error.MissingPath, parseFormatOptions(&.{}));
     try std.testing.expectError(error.UnexpectedArgument, parseFormatOptions(&.{ "a.lace", "b.lace" }));
     try std.testing.expectError(error.UnsupportedFlag, parseFormatOptions(&.{"--check"}));
+}
+
+test "parse check options allows package defaults and json" {
+    const default_options = try parseCheckOptions(&.{});
+    try std.testing.expectEqual(@as(?[]const u8, null), default_options.path);
+    try std.testing.expect(!default_options.json);
+
+    const json_options = try parseCheckOptions(&.{ "--json", "src/main.lace" });
+    try std.testing.expectEqualStrings("src/main.lace", json_options.path.?);
+    try std.testing.expect(json_options.json);
+
+    try std.testing.expectError(error.UnsupportedFlag, parseCheckOptions(&.{"--bad"}));
+    try std.testing.expectError(error.UnexpectedArgument, parseCheckOptions(&.{ "a", "b" }));
 }
 
 test "parse ast options requires json and a path" {

@@ -1,0 +1,16 @@
+module main;
+
+import app/user;
+import std/string;
+
+pub error AppError {
+    invalid_name,
+}
+
+fn main() -> Result<Void, AppError> {
+    let current: user.User = user.make(name: "Sam");
+    if !string.contains(value: current.name, needle: "S") {
+        return Err(AppError.invalid_name);
+    }
+    return Ok(Void);
+}
