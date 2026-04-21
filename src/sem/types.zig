@@ -83,6 +83,37 @@ pub const Param = struct {
     ty: Type,
 };
 
+pub const FieldSurface = struct {
+    name: []const u8,
+    ty: Type,
+};
+
+pub const VariantSurface = struct {
+    name: []const u8,
+    fields: []const FieldSurface,
+};
+
+pub const StructSurface = struct {
+    module_path: []const u8,
+    name: []const u8,
+    fields: []const FieldSurface,
+    visibility: tree.Visibility,
+};
+
+pub const EnumSurface = struct {
+    module_path: []const u8,
+    name: []const u8,
+    variants: []const VariantSurface,
+    visibility: tree.Visibility,
+};
+
+pub const ErrorSurface = struct {
+    module_path: []const u8,
+    name: []const u8,
+    variants: []const VariantSurface,
+    visibility: tree.Visibility,
+};
+
 pub const FunctionSignature = struct {
     module_path: []const u8,
     name: []const u8,
@@ -94,6 +125,9 @@ pub const FunctionSignature = struct {
 pub const ModuleSurface = struct {
     path: []const u8,
     types: []const NamedType,
+    structs: []const StructSurface,
+    enums: []const EnumSurface,
+    errors: []const ErrorSurface,
     functions: []const FunctionSignature,
 };
 
@@ -126,25 +160,37 @@ pub fn buildModuleSurface(
     document: tree.Document,
 ) ResolveTypeError!ModuleSurface {
     var types: std.ArrayList(NamedType) = .empty;
+    var structs: std.ArrayList(StructSurface) = .empty;
+    var enums: std.ArrayList(EnumSurface) = .empty;
+    var errors: std.ArrayList(ErrorSurface) = .empty;
     var functions: std.ArrayList(FunctionSignature) = .empty;
     const module_path = modulePathText(sources, document);
 
     for (document.items) |item| switch (item) {
-        .struct_decl => |decl| try types.append(allocator, .{
-            .module_path = module_path,
-            .name = textAt(sources, document.file_id, decl.name),
-            .kind = .struct_type,
-        }),
-        .enum_decl => |decl| try types.append(allocator, .{
-            .module_path = module_path,
-            .name = textAt(sources, document.file_id, decl.name),
-            .kind = .enum_type,
-        }),
-        .error_decl => |decl| try types.append(allocator, .{
-            .module_path = module_path,
-            .name = textAt(sources, document.file_id, decl.name),
-            .kind = .error_type,
-        }),
+        .struct_decl => |decl| {
+            try types.append(allocator, .{
+                .module_path = module_path,
+                .name = textAt(sources, document.file_id, decl.name),
+                .kind = .struct_type,
+            });
+            try structs.append(allocator, try buildStructSurface(allocator, sources, documents, document, decl));
+        },
+        .enum_decl => |decl| {
+            try types.append(allocator, .{
+                .module_path = module_path,
+                .name = textAt(sources, document.file_id, decl.name),
+                .kind = .enum_type,
+            });
+            try enums.append(allocator, try buildEnumSurface(allocator, sources, documents, document, decl));
+        },
+        .error_decl => |decl| {
+            try types.append(allocator, .{
+                .module_path = module_path,
+                .name = textAt(sources, document.file_id, decl.name),
+                .kind = .error_type,
+            });
+            try errors.append(allocator, try buildErrorSurface(allocator, sources, documents, document, decl));
+        },
         .function_decl => |decl| try functions.append(allocator, try buildFunctionSignature(allocator, sources, documents, document, decl)),
         else => {},
     };
@@ -152,6 +198,9 @@ pub fn buildModuleSurface(
     return .{
         .path = module_path,
         .types = try types.toOwnedSlice(allocator),
+        .structs = try structs.toOwnedSlice(allocator),
+        .enums = try enums.toOwnedSlice(allocator),
+        .errors = try errors.toOwnedSlice(allocator),
         .functions = try functions.toOwnedSlice(allocator),
     };
 }
@@ -208,6 +257,55 @@ pub fn lookupStdlibModule(path: []const u8) ?*const ModuleSurface {
     return null;
 }
 
+pub fn lookupModuleSurface(surface: PackageSurface, path: []const u8) ?*const ModuleSurface {
+    for (surface.modules) |*module| {
+        if (std.mem.eql(u8, module.path, path)) {
+            return module;
+        }
+    }
+    return lookupStdlibModule(path);
+}
+
+pub fn lookupFunction(surface: PackageSurface, module_path: []const u8, name: []const u8) ?*const FunctionSignature {
+    const module = lookupModuleSurface(surface, module_path) orelse return null;
+    for (module.functions) |*function| {
+        if (std.mem.eql(u8, function.name, name)) {
+            return function;
+        }
+    }
+    return null;
+}
+
+pub fn lookupStruct(surface: PackageSurface, module_path: []const u8, name: []const u8) ?*const StructSurface {
+    const module = lookupModuleSurface(surface, module_path) orelse return null;
+    for (module.structs) |*struct_surface| {
+        if (std.mem.eql(u8, struct_surface.name, name)) {
+            return struct_surface;
+        }
+    }
+    return null;
+}
+
+pub fn lookupEnum(surface: PackageSurface, module_path: []const u8, name: []const u8) ?*const EnumSurface {
+    const module = lookupModuleSurface(surface, module_path) orelse return null;
+    for (module.enums) |*enum_surface| {
+        if (std.mem.eql(u8, enum_surface.name, name)) {
+            return enum_surface;
+        }
+    }
+    return null;
+}
+
+pub fn lookupError(surface: PackageSurface, module_path: []const u8, name: []const u8) ?*const ErrorSurface {
+    const module = lookupModuleSurface(surface, module_path) orelse return null;
+    for (module.errors) |*error_surface| {
+        if (std.mem.eql(u8, error_surface.name, name)) {
+            return error_surface;
+        }
+    }
+    return null;
+}
+
 pub fn isBuiltinValueName(name: []const u8) bool {
     return std.mem.eql(u8, name, "Ok") or
         std.mem.eql(u8, name, "Err") or
@@ -239,6 +337,85 @@ fn buildFunctionSignature(
         .return_type = try resolveTypeRef(allocator, sources, documents, document, decl.return_type),
         .visibility = decl.visibility,
     };
+}
+
+fn buildStructSurface(
+    allocator: std.mem.Allocator,
+    sources: *const source.Manager,
+    documents: []const tree.Document,
+    document: tree.Document,
+    decl: tree.StructDecl,
+) ResolveTypeError!StructSurface {
+    return .{
+        .module_path = modulePathText(sources, document),
+        .name = textAt(sources, document.file_id, decl.name),
+        .fields = try buildFieldSurfaces(allocator, sources, documents, document, decl.fields),
+        .visibility = decl.visibility,
+    };
+}
+
+fn buildEnumSurface(
+    allocator: std.mem.Allocator,
+    sources: *const source.Manager,
+    documents: []const tree.Document,
+    document: tree.Document,
+    decl: tree.EnumDecl,
+) ResolveTypeError!EnumSurface {
+    return .{
+        .module_path = modulePathText(sources, document),
+        .name = textAt(sources, document.file_id, decl.name),
+        .variants = try buildVariantSurfaces(allocator, sources, documents, document, decl.variants),
+        .visibility = decl.visibility,
+    };
+}
+
+fn buildErrorSurface(
+    allocator: std.mem.Allocator,
+    sources: *const source.Manager,
+    documents: []const tree.Document,
+    document: tree.Document,
+    decl: tree.ErrorDecl,
+) ResolveTypeError!ErrorSurface {
+    return .{
+        .module_path = modulePathText(sources, document),
+        .name = textAt(sources, document.file_id, decl.name),
+        .variants = try buildVariantSurfaces(allocator, sources, documents, document, decl.variants),
+        .visibility = decl.visibility,
+    };
+}
+
+fn buildFieldSurfaces(
+    allocator: std.mem.Allocator,
+    sources: *const source.Manager,
+    documents: []const tree.Document,
+    document: tree.Document,
+    fields: []const tree.Field,
+) ResolveTypeError![]const FieldSurface {
+    const result = try allocator.alloc(FieldSurface, fields.len);
+    for (fields, 0..) |field, index| {
+        result[index] = .{
+            .name = textAt(sources, document.file_id, field.name),
+            .ty = try resolveTypeRef(allocator, sources, documents, document, field.type_ref),
+        };
+    }
+    return result;
+}
+
+fn buildVariantSurfaces(
+    allocator: std.mem.Allocator,
+    sources: *const source.Manager,
+    documents: []const tree.Document,
+    document: tree.Document,
+    variants: []const tree.Variant,
+) ResolveTypeError![]const VariantSurface {
+    const result = try allocator.alloc(VariantSurface, variants.len);
+    for (variants, 0..) |variant, index| {
+        result[index] = .{
+            .name = textAt(sources, document.file_id, variant.name),
+            .fields = try buildFieldSurfaces(allocator, sources, documents, document, variant.fields),
+        };
+    }
+    return result;
 }
 
 fn primitiveByName(name: []const u8) ?Primitive {
@@ -346,16 +523,25 @@ const stdlib_modules = [_]ModuleSurface{
     .{
         .path = "std/result",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{},
     },
     .{
         .path = "std/option",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{},
     },
     .{
         .path = "std/string",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{
             .{
                 .module_path = "std/string",
@@ -372,6 +558,9 @@ const stdlib_modules = [_]ModuleSurface{
     .{
         .path = "std/int",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{
             .{
                 .module_path = "std/int",
@@ -399,6 +588,9 @@ const stdlib_modules = [_]ModuleSurface{
     .{
         .path = "std/assert",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{
             .{
                 .module_path = "std/assert",
@@ -436,12 +628,20 @@ const stdlib_modules = [_]ModuleSurface{
     .{
         .path = "std/test",
         .types = &.{},
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{},
         .functions = &.{},
     },
     .{
         .path = "std/json",
         .types = &.{
             .{ .module_path = "std/json", .name = "JsonError", .kind = .error_type },
+        },
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{
+            .{ .module_path = "std/json", .name = "JsonError", .variants = &.{}, .visibility = .public },
         },
         .functions = &.{
             .{
@@ -457,6 +657,11 @@ const stdlib_modules = [_]ModuleSurface{
         .path = "std/fs",
         .types = &.{
             .{ .module_path = "std/fs", .name = "FsError", .kind = .error_type },
+        },
+        .structs = &.{},
+        .enums = &.{},
+        .errors = &.{
+            .{ .module_path = "std/fs", .name = "FsError", .variants = &.{}, .visibility = .public },
         },
         .functions = &.{
             .{
@@ -560,10 +765,13 @@ test "package surface models user defined types and functions" {
 
     try std.testing.expectEqual(@as(usize, 1), surface.modules.len);
     try std.testing.expectEqual(@as(usize, 2), surface.modules[0].types.len);
+    try std.testing.expectEqual(@as(usize, 1), surface.modules[0].structs.len);
+    try std.testing.expectEqual(@as(usize, 1), surface.modules[0].errors.len);
     try std.testing.expectEqual(@as(usize, 1), surface.modules[0].functions.len);
     try std.testing.expectEqualStrings("signup", surface.modules[0].functions[0].name);
     try std.testing.expect(surface.modules[0].functions[0].return_type.eql(.{ .generic = .{ .kind = .result, .args = &.{
         .{ .named = .{ .module_path = "app/signup", .name = "SignupInput", .kind = .struct_type } },
         .{ .named = .{ .module_path = "app/signup", .name = "SignupError", .kind = .error_type } },
     } } }));
+    try std.testing.expectEqualStrings("email", surface.modules[0].structs[0].fields[0].name);
 }
