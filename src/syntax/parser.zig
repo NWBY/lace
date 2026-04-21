@@ -1374,6 +1374,17 @@ test "parser rejects positional calls" {
     , "P0102");
 }
 
+test "parser requires bind else branches" {
+    try expectParseError(
+        \\module demo;
+        \\
+        \\fn main() -> Int {
+        \\    bind value = parse_port(value: "3000");
+        \\    return value;
+        \\}
+    , "P0065");
+}
+
 test "parser requires explicit function return types" {
     try expectParseError(
         \\module demo;

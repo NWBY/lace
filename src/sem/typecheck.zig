@@ -125,11 +125,15 @@ const Checker = struct {
             .bind_stmt => |stmt| try self.checkBindStmt(stmt),
             .if_stmt => |stmt| try self.checkIfStmt(stmt),
             .match_stmt => |stmt| {
-                _ = try self.checkMatchExpr(stmt, null);
+                if (try self.checkMatchExpr(stmt, null)) |match_type| {
+                    try self.reportUnhandledRecoverable(stmt.span, match_type);
+                }
             },
             .return_stmt => |stmt| try self.checkReturnStmt(stmt),
             .expr_stmt => |stmt| {
-                _ = try self.checkExpr(stmt.value, null);
+                if (try self.checkExpr(stmt.value, null)) |expr_type| {
+                    try self.reportUnhandledRecoverable(stmt.span, expr_type);
+                }
             },
         }
     }
@@ -486,9 +490,21 @@ const Checker = struct {
     }
 
     fn checkMatchExpr(self: *Checker, expr: tree.MatchExpr, expected: ?types.Type) CheckError!?types.Type {
-        _ = try self.checkExpr(expr.value, null);
+        const scrutinee_type = try self.checkExpr(expr.value, null) orelse return null;
         var result_type: ?types.Type = null;
+        var coverage = Coverage.init(self.allocator, self.surface, scrutinee_type);
+
         for (expr.arms) |arm| {
+            try self.pushScope();
+            const coverage_result = try self.checkPattern(arm.pattern, scrutinee_type);
+            defer self.popScope();
+
+            switch (coverage_result) {
+                .catch_all => coverage.catch_all = true,
+                .label => |label| try coverage.markSeen(label),
+                .none => {},
+            }
+
             switch (arm.body) {
                 .block => |block| try self.checkBlock(block, true),
                 .return_stmt => |stmt| try self.checkReturnStmt(stmt),
@@ -502,7 +518,158 @@ const Checker = struct {
                 },
             }
         }
+
+        if (!coverage.isExhaustive()) {
+            try self.report("T1147", "Match expression is not exhaustive", expr.span, coverage.firstMissing());
+        }
+
         return result_type orelse expected;
+    }
+
+    fn checkPattern(self: *Checker, pattern: tree.Pattern, scrutinee_type: types.Type) CheckError!PatternCoverage {
+        return switch (pattern) {
+            .binding => |value| blk: {
+                try self.declareLocal(self.text(value.span), scrutinee_type);
+                break :blk .catch_all;
+            },
+            .path => |value| try self.checkPathPattern(value, scrutinee_type),
+        };
+    }
+
+    fn checkPathPattern(self: *Checker, pattern: tree.PathPattern, scrutinee_type: types.Type) CheckError!PatternCoverage {
+        const root = self.text(pattern.path.segments[0]);
+
+        if (std.mem.eql(u8, root, "None")) {
+            if (pattern.payload != null) {
+                try self.report("T1148", "`None` does not accept a payload pattern", pattern.span, null);
+                return .none;
+            }
+            if (optionInnerType(scrutinee_type) == null) {
+                try self.report("T1149", "`None` patterns require an `Option<T>` scrutinee", pattern.span, null);
+                return .none;
+            }
+            return .{ .label = "None" };
+        }
+
+        if (std.mem.eql(u8, root, "Some")) {
+            const inner_type = optionInnerType(scrutinee_type) orelse {
+                try self.report("T1150", "`Some(...)` patterns require an `Option<T>` scrutinee", pattern.span, null);
+                return .none;
+            };
+            if (pattern.payload == null) {
+                try self.report("T1151", "`Some(...)` patterns require a payload pattern", pattern.span, null);
+                return .none;
+            }
+            switch (pattern.payload.?) {
+                .positional => |inner| {
+                    _ = try self.checkPattern(inner.*, inner_type);
+                },
+                .named => {
+                    try self.report("T1152", "`Some(...)` patterns accept a single positional payload", pattern.span, null);
+                    return .none;
+                },
+            }
+            return .{ .label = "Some" };
+        }
+
+        if (std.mem.eql(u8, root, "Ok") or std.mem.eql(u8, root, "Err")) {
+            const payload_type = if (std.mem.eql(u8, root, "Ok"))
+                resultSuccessType(scrutinee_type)
+            else
+                resultErrorType(scrutinee_type);
+
+            const matched_type = payload_type orelse {
+                try self.report("T1153", "`Ok(...)` and `Err(...)` patterns require a `Result<T, E>` scrutinee", pattern.span, null);
+                return .none;
+            };
+
+            if (pattern.payload == null) {
+                try self.report("T1154", "`Ok(...)` and `Err(...)` patterns require a payload pattern", pattern.span, null);
+                return .none;
+            }
+
+            switch (pattern.payload.?) {
+                .positional => |inner| {
+                    _ = try self.checkPattern(inner.*, matched_type);
+                },
+                .named => {
+                    try self.report("T1155", "`Ok(...)` and `Err(...)` patterns accept a single positional payload", pattern.span, null);
+                    return .none;
+                },
+            }
+
+            return .{ .label = root };
+        }
+
+        return try self.checkNamedVariantPattern(pattern, scrutinee_type);
+    }
+
+    fn checkNamedVariantPattern(self: *Checker, pattern: tree.PathPattern, scrutinee_type: types.Type) CheckError!PatternCoverage {
+        const owner = self.resolveNamedTypeFromPath(pattern.path) orelse {
+            try self.report("T1156", "Pattern must reference a known enum or error variant", pattern.span, null);
+            return .none;
+        };
+
+        if (!scrutinee_type.eql(.{ .named = owner })) {
+            try self.report("T1157", "Pattern does not match the scrutinee type", pattern.span, owner.name);
+            return .none;
+        }
+
+        const variant_name = self.text(pattern.path.segments[pattern.path.segments.len - 1]);
+        const variant = switch (owner.kind) {
+            .enum_type => blk: {
+                const surface = types.lookupEnum(self.surface, owner.module_path, owner.name) orelse break :blk null;
+                break :blk findVariant(surface.variants, variant_name);
+            },
+            .error_type => blk: {
+                const surface = types.lookupError(self.surface, owner.module_path, owner.name) orelse break :blk null;
+                break :blk findVariant(surface.variants, variant_name);
+            },
+            else => null,
+        } orelse {
+            try self.report("T1158", "Unknown enum or error variant in pattern", pattern.span, variant_name);
+            return .none;
+        };
+
+        if (variant.fields.len == 0) {
+            if (pattern.payload != null) {
+                try self.report("T1159", "This variant does not accept a payload pattern", pattern.span, variant_name);
+                return .none;
+            }
+            return .{ .label = variant_name };
+        }
+
+        const payload = pattern.payload orelse {
+            try self.report("T1160", "Pattern must destructure all variant fields explicitly", pattern.span, variant_name);
+            return .none;
+        };
+
+        switch (payload) {
+            .positional => |inner| {
+                if (variant.fields.len != 1) {
+                    try self.report("T1161", "Positional pattern payloads are only valid for single-field variants", pattern.span, variant_name);
+                    return .none;
+                }
+                _ = try self.checkPattern(inner.*, variant.fields[0].ty);
+            },
+            .named => |fields| {
+                for (fields) |field| {
+                    const expected_field = findField(variant.fields, self.text(field.name)) orelse {
+                        try self.report("T1162", "Unknown variant pattern field", field.span, self.text(field.name));
+                        return .none;
+                    };
+                    _ = try self.checkPattern(field.value.*, expected_field.ty);
+                }
+                for (variant.fields) |expected_field| {
+                    if (self.findPatternField(fields, expected_field.name) == null) {
+                        try self.report("T1163", "Missing required variant pattern field", pattern.span, expected_field.name);
+                        return .none;
+                    }
+                }
+            },
+        }
+
+        return .{ .label = variant_name };
     }
 
     fn checkAccessPath(self: *Checker, path: tree.AccessPath, expected: ?types.Type) CheckError!?types.Type {
@@ -781,6 +948,117 @@ const Checker = struct {
             .symbol = symbol,
         });
     }
+
+    fn reportUnhandledRecoverable(self: *Checker, span: source.Span, ty: types.Type) CheckError!void {
+        if (isRecoverableType(ty)) {
+            try self.report("T1164", "Recoverable values must be handled explicitly", span, null);
+        }
+    }
+
+    fn findPatternField(self: *Checker, fields: []const tree.PatternField, name: []const u8) ?tree.PatternField {
+        for (fields) |field| {
+            if (std.mem.eql(u8, name, self.text(field.name))) {
+                return field;
+            }
+        }
+        return null;
+    }
+};
+
+const PatternCoverage = union(enum) {
+    none,
+    catch_all,
+    label: []const u8,
+};
+
+const Coverage = struct {
+    allocator: std.mem.Allocator,
+    surface: types.PackageSurface,
+    kind: Kind,
+    owner: ?types.NamedType,
+    seen: std.ArrayList([]const u8) = .empty,
+    catch_all: bool = false,
+
+    const Kind = enum {
+        none,
+        option,
+        result,
+        enum_type,
+        error_type,
+    };
+
+    fn init(allocator: std.mem.Allocator, surface: types.PackageSurface, scrutinee_type: types.Type) Coverage {
+        const kind, const owner = switch (scrutinee_type) {
+            .generic => |value| switch (value.kind) {
+                .option => .{ Kind.option, null },
+                .result => .{ Kind.result, null },
+                else => .{ Kind.none, null },
+            },
+            .named => |value| switch (value.kind) {
+                .enum_type => .{ Kind.enum_type, value },
+                .error_type => .{ Kind.error_type, value },
+                else => .{ Kind.none, null },
+            },
+            else => .{ Kind.none, null },
+        };
+
+        return .{
+            .allocator = allocator,
+            .surface = surface,
+            .kind = kind,
+            .owner = owner,
+        };
+    }
+
+    fn markSeen(self: *Coverage, label: []const u8) CheckError!void {
+        for (self.seen.items) |existing| {
+            if (std.mem.eql(u8, existing, label)) {
+                return;
+            }
+        }
+        try self.seen.append(self.allocator, label);
+    }
+
+    fn isExhaustive(self: *const Coverage) bool {
+        if (self.catch_all) {
+            return true;
+        }
+
+        return self.firstMissing() == null;
+    }
+
+    fn firstMissing(self: *const Coverage) ?[]const u8 {
+        return switch (self.kind) {
+            .none => null,
+            .option => if (self.hasSeen("Some")) if (self.hasSeen("None")) null else "None" else "Some",
+            .result => if (self.hasSeen("Ok")) if (self.hasSeen("Err")) null else "Err" else "Ok",
+            .enum_type => blk: {
+                const owner = self.owner orelse break :blk null;
+                const enum_surface = types.lookupEnum(self.surface, owner.module_path, owner.name) orelse break :blk null;
+                for (enum_surface.variants) |variant| {
+                    if (!self.hasSeen(variant.name)) break :blk variant.name;
+                }
+                break :blk null;
+            },
+            .error_type => blk: {
+                const owner = self.owner orelse break :blk null;
+                const error_surface = types.lookupError(self.surface, owner.module_path, owner.name) orelse break :blk null;
+                for (error_surface.variants) |variant| {
+                    if (!self.hasSeen(variant.name)) break :blk variant.name;
+                }
+                break :blk null;
+            },
+        };
+    }
+
+    fn hasSeen(self: *const Coverage, label: []const u8) bool {
+        for (self.seen.items) |seen| {
+            if (std.mem.eql(u8, seen, label)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 const LocalBinding = struct {
@@ -830,6 +1108,14 @@ fn isConcreteType(ty: types.Type) bool {
         else => true,
     };
 }
+
+fn isRecoverableType(ty: types.Type) bool {
+    return switch (ty) {
+        .generic => |value| value.kind == .option or value.kind == .result,
+        else => false,
+    };
+}
+
 
 fn findParam(params: []const types.Param, name: []const u8) ?types.Param {
     for (params) |param| {
@@ -905,6 +1191,67 @@ test "type checker accepts a public API example" {
     try std.testing.expectEqual(@as(usize, 0), fixture.diagnostics.count());
 }
 
+test "type checker accepts parse_port with bind and exhaustive error matching" {
+    var fixture = try TestFixture.init(&.{
+        .{ .path = "src/app/config.lace", .contents =
+            \\module app/config;
+            \\import std/int;
+            \\
+            \\pub error ParsePortError {
+            \\    empty_input,
+            \\    invalid_integer(input: String),
+            \\    out_of_range(min: Int, max: Int),
+            \\}
+            \\
+            \\pub error ConfigError {
+            \\    missing_port,
+            \\    invalid_port(input: String),
+            \\    port_out_of_range(min: Int, max: Int),
+            \\}
+            \\
+            \\pub fn parse_port(
+            \\    value: String,
+            \\) -> Result<Int, ParsePortError> {
+            \\    if value == "" {
+            \\        return Err(ParsePortError.empty_input);
+            \\    }
+            \\
+            \\    if !int.is_valid(value: value) {
+            \\        return Err(ParsePortError.invalid_integer(input: value));
+            \\    }
+            \\
+            \\    let port = int.parse(value: value);
+            \\
+            \\    if port < 1 {
+            \\        return Err(ParsePortError.out_of_range(min: 1, max: 65535));
+            \\    }
+            \\
+            \\    if port > 65535 {
+            \\        return Err(ParsePortError.out_of_range(min: 1, max: 65535));
+            \\    }
+            \\
+            \\    return Ok(port);
+            \\}
+            \\
+            \\pub fn load_port(
+            \\    input: String,
+            \\) -> Result<Int, ConfigError> {
+            \\    bind port: Int = parse_port(value: input) else err => match err {
+            \\        ParsePortError.empty_input => return Err(ConfigError.missing_port);
+            \\        ParsePortError.invalid_integer(input: bad_input) => return Err(ConfigError.invalid_port(input: bad_input));
+            \\        ParsePortError.out_of_range(min: min, max: max) => return Err(ConfigError.port_out_of_range(min: min, max: max));
+            \\    };
+            \\
+            \\    return Ok(port);
+            \\}
+        },
+    });
+    defer fixture.deinit();
+
+    _ = try typecheckDocuments(fixture.arena.allocator(), &fixture.diagnostics, &fixture.sources, fixture.documents);
+    try std.testing.expectEqual(@as(usize, 0), fixture.diagnostics.count());
+}
+
 test "type checker rejects wrong return types" {
     try expectTypecheckCodes(&.{
         .{ .path = "src/app/demo.lace", .contents =
@@ -962,6 +1309,80 @@ test "type checker rejects non-bool conditions" {
             \\}
         },
     }, &.{"T1105"});
+}
+
+test "type checker rejects non-exhaustive result matches" {
+    try expectTypecheckCodes(&.{
+        .{ .path = "src/app/demo.lace", .contents =
+            \\module app/demo;
+            \\
+            \\pub error DemoError {
+            \\    bad_input,
+            \\}
+            \\
+            \\fn main(
+            \\    value: Result<Int, DemoError>,
+            \\) -> Int {
+            \\    return match value {
+            \\        Ok(port) => port;
+            \\    };
+            \\}
+        },
+    }, &.{"T1147"});
+}
+
+test "type checker rejects invalid bind targets" {
+    try expectTypecheckCodes(&.{
+        .{ .path = "src/app/demo.lace", .contents =
+            \\module app/demo;
+            \\
+            \\fn main() -> Int {
+            \\    bind value = 1 else err => {
+            \\        return 0;
+            \\    };
+            \\
+            \\    return value;
+            \\}
+        },
+    }, &.{"T1115"});
+}
+
+test "type checker rejects invalid option patterns" {
+    try expectTypecheckCodes(&.{
+        .{ .path = "src/app/demo.lace", .contents =
+            \\module app/demo;
+            \\
+            \\fn main(
+            \\    value: Option<Int>,
+            \\) -> Int {
+            \\    return match value {
+            \\        Some => 1;
+            \\        other => 0;
+            \\    };
+            \\}
+        },
+    }, &.{"T1151"});
+}
+
+test "type checker rejects unhandled recoverable expression statements" {
+    try expectTypecheckCodes(&.{
+        .{ .path = "src/app/demo.lace", .contents =
+            \\module app/demo;
+            \\
+            \\pub error DemoError {
+            \\    bad_input,
+            \\}
+            \\
+            \\fn parse_port() -> Result<Int, DemoError> {
+            \\    return Ok(42);
+            \\}
+            \\
+            \\fn main() -> Void {
+            \\    parse_port();
+            \\    return Void;
+            \\}
+        },
+    }, &.{"T1164"});
 }
 
 const Fixture = struct {
