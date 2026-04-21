@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 006: Stable AST and JSON Output
 
 ## Goal

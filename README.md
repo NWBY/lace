@@ -14,11 +14,13 @@ Implemented so far:
 - deterministic lexer for the current Lace token set
 - parser for top-level declarations and signatures
 - parser for statements, expressions, match patterns, and block bodies
+- stable AST JSON output with deterministic node IDs
+- `lace ast --json <file>`
 
 In progress next:
 
-- stable AST output
-- formatter and `lace check`
+- canonical formatter
+- `lace check`
 
 ## Goals
 
@@ -33,10 +35,11 @@ Lace is designed to be:
 
 ## Current Commands
 
-The CLI scaffold is in place, but only help output is implemented today.
+Implemented today:
 
 ```sh
 zig build run -- --help
+zig build run -- ast --json examples/demo.lace
 ```
 
 Build and test the Zig implementation with:
@@ -55,10 +58,11 @@ src/
   context.zig     shared compiler context
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
-  syntax/         lexer and parser work
+  syntax/         lexer, parser, and AST JSON output
   sem/            semantic analysis placeholder
   pkg/            package system placeholder
   backend/        execution backend placeholder
+examples/         sample Lace source files
 todo/             ordered implementation roadmap
 ```
 
@@ -75,6 +79,7 @@ The current sequence starts with:
 4. parser for top-level declarations
 5. parser for statements and expressions
 6. stable AST and JSON output
+7. canonical formatter
 
 ## Design Direction
 
