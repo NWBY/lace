@@ -4,8 +4,10 @@ const Io = std.Io;
 pub const backend = @import("backend/mod.zig");
 pub const cli = @import("cli/mod.zig");
 pub const diag = @import("diag/mod.zig");
+pub const id = @import("id.zig");
 pub const pkg = @import("pkg/mod.zig");
 pub const sem = @import("sem/mod.zig");
+pub const source = @import("source.zig");
 pub const syntax = @import("syntax/mod.zig");
 
 pub const Context = @import("context.zig").Context;

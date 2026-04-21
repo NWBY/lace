@@ -1,16 +1,38 @@
 const std = @import("std");
+const source = @import("../source.zig");
 
 pub const Level = enum {
     note,
     warning,
     @"error",
+
+    pub fn label(self: Level) []const u8 {
+        return switch (self) {
+            .note => "note",
+            .warning => "warning",
+            .@"error" => "error",
+        };
+    }
+};
+
+pub const Detail = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+pub const SuggestedFix = struct {
+    kind: []const u8,
+    text: []const u8,
 };
 
 pub const Diagnostic = struct {
     level: Level = .@"error",
     code: []const u8,
     message: []const u8,
-    path: ?[]const u8 = null,
+    span: ?source.Span = null,
+    symbol: ?[]const u8 = null,
+    details: []const Detail = &.{},
+    suggested_fixes: []const SuggestedFix = &.{},
 };
 
 pub const Store = struct {
