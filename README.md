@@ -15,11 +15,13 @@ Implemented so far:
 - parser for top-level declarations and signatures
 - parser for statements, expressions, match patterns, and block bodies
 - stable AST JSON output with deterministic node IDs
+- canonical formatter with deterministic rewrites
+- `lace fmt <file>`
 - `lace ast --json <file>`
 
 In progress next:
 
-- canonical formatter
+- module path and import validation
 - `lace check`
 
 ## Goals
@@ -39,6 +41,7 @@ Implemented today:
 
 ```sh
 zig build run -- --help
+zig build run -- fmt examples/demo.lace
 zig build run -- ast --json examples/demo.lace
 ```
 
@@ -80,6 +83,7 @@ The current sequence starts with:
 5. parser for statements and expressions
 6. stable AST and JSON output
 7. canonical formatter
+8. module path and import validation
 
 ## Design Direction
 

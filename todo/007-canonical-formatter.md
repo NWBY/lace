@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 007: Canonical Formatter
 
 ## Goal
