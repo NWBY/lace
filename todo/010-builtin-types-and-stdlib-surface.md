@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 010: Builtin Types and Standard Library Surface
 
 ## Goal

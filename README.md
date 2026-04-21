@@ -18,12 +18,13 @@ Implemented so far:
 - canonical formatter with deterministic rewrites
 - module path and import validation
 - symbol tables, name resolution, and import-cycle detection
+- builtin primitive/generic type model and stdlib signatures
 - `lace fmt <file>`
 - `lace ast --json <file>`
 
 In progress next:
 
-- builtin types and stdlib surface
+- core type checking
 - `lace check`
 
 ## Goals
@@ -64,7 +65,7 @@ src/
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
-  sem/            semantic validation, resolution, and later typing
+  sem/            semantic validation, resolution, type surfaces, and later checking
   pkg/            package system placeholder
   backend/        execution backend placeholder
 examples/         sample Lace source files
@@ -87,6 +88,7 @@ The current sequence starts with:
 7. canonical formatter
 8. module path and import validation
 9. symbol table and name resolution
+10. builtin types and stdlib surface
 
 ## Design Direction
 
