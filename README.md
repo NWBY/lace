@@ -19,12 +19,13 @@ Implemented so far:
 - module path and import validation
 - symbol tables, name resolution, and import-cycle detection
 - builtin primitive/generic type model and stdlib signatures
+- core type checking for declarations, calls, returns, and struct initialization
 - `lace fmt <file>`
 - `lace ast --json <file>`
 
 In progress next:
 
-- core type checking
+- result and option semantics
 - `lace check`
 
 ## Goals
@@ -65,7 +66,7 @@ src/
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
-  sem/            semantic validation, resolution, type surfaces, and later checking
+  sem/            semantic validation, resolution, type surfaces, and core checking
   pkg/            package system placeholder
   backend/        execution backend placeholder
 examples/         sample Lace source files
@@ -89,6 +90,7 @@ The current sequence starts with:
 8. module path and import validation
 9. symbol table and name resolution
 10. builtin types and stdlib surface
+11. core type checking
 
 ## Design Direction
 

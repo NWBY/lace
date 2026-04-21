@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 011: Type Checker Core
 
 ## Goal
