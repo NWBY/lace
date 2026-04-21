@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 002: Source Files, Spans, and Diagnostics
 
 ## Goal

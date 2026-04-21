@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 003: Token Model and Lexer
 
 ## Goal

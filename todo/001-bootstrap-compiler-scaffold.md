@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 001: Bootstrap Compiler Scaffold
 
 ## Goal
