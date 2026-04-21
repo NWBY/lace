@@ -41,7 +41,7 @@ Lace is designed to be:
 
 ## Current Commands
 
-Implemented today:
+Implemented so far:
 
 ```sh
 zig build run -- --help
@@ -54,6 +54,20 @@ Build and test the Zig implementation with:
 ```sh
 zig build
 zig build test
+```
+
+### fmt
+
+The fmt command should always produce the same output for the same input providing agents with a stable canonical format.
+
+```sh
+zig build run -- fmt examples/demo.lace
+```
+
+### ast
+
+```sh
+zig build run -- ast --json examples/demo.lace
 ```
 
 ## Repository Layout
