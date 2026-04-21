@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 005: Parser for Statements and Expressions
 
 ## Goal

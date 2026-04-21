@@ -13,10 +13,11 @@ Implemented so far:
 - structured diagnostics with text and JSON rendering
 - deterministic lexer for the current Lace token set
 - parser for top-level declarations and signatures
+- parser for statements, expressions, match patterns, and block bodies
 
 In progress next:
 
-- statement and expression parser
+- stable AST output
 - formatter and `lace check`
 
 ## Goals
@@ -73,6 +74,7 @@ The current sequence starts with:
 3. lexer
 4. parser for top-level declarations
 5. parser for statements and expressions
+6. stable AST and JSON output
 
 ## Design Direction
 
