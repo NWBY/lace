@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 009: Symbol Table and Name Resolution
 
 ## Goal

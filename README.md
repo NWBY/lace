@@ -17,12 +17,13 @@ Implemented so far:
 - stable AST JSON output with deterministic node IDs
 - canonical formatter with deterministic rewrites
 - module path and import validation
+- symbol tables, name resolution, and import-cycle detection
 - `lace fmt <file>`
 - `lace ast --json <file>`
 
 In progress next:
 
-- symbol table and name resolution
+- builtin types and stdlib surface
 - `lace check`
 
 ## Goals
@@ -63,7 +64,7 @@ src/
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
-  sem/            semantic validation and later name resolution
+  sem/            semantic validation, resolution, and later typing
   pkg/            package system placeholder
   backend/        execution backend placeholder
 examples/         sample Lace source files
@@ -85,6 +86,7 @@ The current sequence starts with:
 6. stable AST and JSON output
 7. canonical formatter
 8. module path and import validation
+9. symbol table and name resolution
 
 ## Design Direction
 
