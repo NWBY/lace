@@ -3,6 +3,7 @@ const Io = std.Io;
 
 const cli = @import("cli/mod.zig");
 const diag = @import("diag/mod.zig");
+const backend = @import("backend/mod.zig");
 const pkg = @import("pkg/mod.zig");
 const sem = @import("sem/mod.zig");
 const source = @import("source.zig");
@@ -63,6 +64,8 @@ pub const Context = struct {
             .init => return self.executeInitCommand(stderr, command.args),
             .fmt => return self.executeFmtCommand(stderr, command.args),
             .check => return self.executeCheckCommand(stdout, stderr, command.args),
+            .build => return self.executeBuildCommand(stdout, stderr, command.args),
+            .run => return self.executeRunCommand(stdout, stderr, command.args),
             .types => return self.executeTypesCommand(stdout, stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             .diag => return self.executeDiagCommand(stdout, stderr, command.args),
@@ -180,6 +183,186 @@ pub const Context = struct {
         }
 
         return if (diagnostics.count() == 0) 0 else 1;
+    }
+
+    fn executeBuildCommand(
+        self: *Context,
+        stdout: *Io.Writer,
+        stderr: *Io.Writer,
+        args: []const []const u8,
+    ) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseBuildOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace build [--json] [--release] [--target <triple>] [path]\n");
+            switch (err) {
+                error.MissingTargetValue => try stderr.writeAll("`lace build --target` requires a target triple.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace build` accepts at most one path argument.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace build` flag.\n"),
+            }
+            return 1;
+        };
+
+        if (options.release or options.target != null) {
+            try stderr.writeAll("The interpreter backend does not support `--release` or `--target` yet.\n");
+            return 1;
+        }
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace build` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        const manifest = self.loadManifestFromRoot(arena, io, package_root) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace build` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+        defer {
+            var manifest_mut = manifest;
+            manifest_mut.deinit(arena);
+        }
+
+        var diagnostics: diag.Store = .{};
+        const loaded = self.loadDocuments(arena, &diagnostics, .{ .package = .{ .root = package_root } }, true) catch |err| switch (err) {
+            error.IoUnavailable => {
+                try stderr.writeAll("`lace build` requires process I/O for package traversal.\n");
+                return 1;
+            },
+            error.NoSourceFiles => {
+                try stderr.writeAll("No Lace source files were found.\n");
+                return 1;
+            },
+            else => {
+                try stderr.print("Failed to load sources: {t}\n", .{err});
+                return 1;
+            },
+        };
+
+        const program = backend.prepareProgram(arena, &diagnostics, &self.files, loaded.documents) catch |err| switch (err) {
+            error.DiagnosticsPresent => null,
+            else => return err,
+        };
+        if (diagnostics.count() != 0 or program == null) {
+            if (options.json) {
+                try self.renderCheckJson(stdout, &diagnostics);
+                try stdout.writeByte('\n');
+            } else {
+                try self.renderDiagnostics(stderr, &diagnostics);
+            }
+            return 1;
+        }
+
+        const entry = self.resolveEntry(arena, package_root, manifest, loaded.documents) catch |err| switch (err) {
+            error.MissingBuildEntry => {
+                try stderr.writeAll("`lace build` requires a `[build]` section with an entry file.\n");
+                return 1;
+            },
+            error.EntryNotFound => {
+                try stderr.writeAll("The manifest entry target was not found in the loaded package sources.\n");
+                return 1;
+            },
+            else => return err,
+        };
+        const artifact_path = try self.writeBuildArtifact(arena, io, package_root, manifest.package.name, entry.module_path, loaded.paths);
+
+        if (options.json) {
+            var json: std.json.Stringify = .{ .writer = stdout, .options = .{} };
+            try json.beginObject();
+            try json.objectField("status");
+            try json.write("ok");
+            try json.objectField("artifact");
+            try json.write(artifact_path);
+            try json.endObject();
+            try stdout.writeByte('\n');
+        }
+
+        return 0;
+    }
+
+    fn executeRunCommand(
+        self: *Context,
+        stdout: *Io.Writer,
+        stderr: *Io.Writer,
+        args: []const []const u8,
+    ) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseRunOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace run [path] [-- arg1 arg2 ...]\n");
+            switch (err) {
+                error.UnexpectedArgument => try stderr.writeAll("`lace run` accepts at most one path argument before `--`.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace run` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace run` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        const manifest = self.loadManifestFromRoot(arena, io, package_root) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace run` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+        defer {
+            var manifest_mut = manifest;
+            manifest_mut.deinit(arena);
+        }
+
+        var diagnostics: diag.Store = .{};
+        const loaded = self.loadDocuments(arena, &diagnostics, .{ .package = .{ .root = package_root } }, true) catch |err| switch (err) {
+            error.IoUnavailable => {
+                try stderr.writeAll("`lace run` requires process I/O for package traversal.\n");
+                return 1;
+            },
+            error.NoSourceFiles => {
+                try stderr.writeAll("No Lace source files were found.\n");
+                return 1;
+            },
+            else => {
+                try stderr.print("Failed to load sources: {t}\n", .{err});
+                return 1;
+            },
+        };
+
+        var program = backend.prepareProgram(arena, &diagnostics, &self.files, loaded.documents) catch |err| switch (err) {
+            error.DiagnosticsPresent => null,
+            else => return err,
+        };
+        if (diagnostics.count() != 0 or program == null) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        const entry = self.resolveEntry(arena, package_root, manifest, loaded.documents) catch |err| switch (err) {
+            error.MissingBuildEntry => {
+                try stderr.writeAll("`lace run` requires a `[build]` section with an entry file.\n");
+                return 1;
+            },
+            error.EntryNotFound => {
+                try stderr.writeAll("The manifest entry target was not found in the loaded package sources.\n");
+                return 1;
+            },
+            else => return err,
+        };
+        const result = try backend.runEntry(&program.?, stdout, entry.module_path, "main", options.forwarded_args);
+        return switch (result) {
+            .variant => |variant| if (std.mem.eql(u8, variant.owner_module_path, "builtin") and std.mem.eql(u8, variant.owner_name, "Result") and std.mem.eql(u8, variant.name, "Err")) 1 else 0,
+            else => 0,
+        };
     }
 
     fn executeTypesCommand(
@@ -536,6 +719,88 @@ pub const Context = struct {
         };
     }
 
+    fn resolvePackageRoot(self: *const Context, allocator: std.mem.Allocator, io: Io, path: ?[]const u8) ![]const u8 {
+        if (path) |value| {
+            if (std.mem.endsWith(u8, value, ".lace")) {
+                return try self.findPackageRootForFile(allocator, io, value) orelse error.FileNotFound;
+            }
+            return allocator.dupe(u8, value);
+        }
+        return allocator.dupe(u8, ".");
+    }
+
+    fn resolveEntry(
+        self: *const Context,
+        allocator: std.mem.Allocator,
+        package_root: []const u8,
+        manifest: pkg.Manifest,
+        documents: []const syntax.Tree.Document,
+    ) !EntryTarget {
+        const build = manifest.build orelse return error.MissingBuildEntry;
+        const entry_path = if (std.mem.eql(u8, package_root, "."))
+            build.entry
+        else
+            try std.fs.path.join(allocator, &.{ package_root, build.entry });
+        defer if (!std.mem.eql(u8, package_root, ".")) allocator.free(entry_path);
+
+        for (documents) |document| {
+            const file = self.sourceFile(document.file_id);
+            if (std.mem.eql(u8, file.path, entry_path)) {
+                return .{
+                    .path = build.entry,
+                    .module_path = file.source[document.module_decl.path.span.start..document.module_decl.path.span.end],
+                };
+            }
+        }
+        return error.EntryNotFound;
+    }
+
+    fn writeBuildArtifact(
+        self: *Context,
+        allocator: std.mem.Allocator,
+        io: Io,
+        package_root: []const u8,
+        package_name: []const u8,
+        entry_module_path: []const u8,
+        source_paths: []const []const u8,
+    ) ![]const u8 {
+        _ = self;
+        const build_dir = if (std.mem.eql(u8, package_root, "."))
+            try allocator.dupe(u8, "build")
+        else
+            try std.fs.path.join(allocator, &.{ package_root, "build" });
+        defer allocator.free(build_dir);
+        try std.Io.Dir.cwd().createDirPath(io, build_dir);
+
+        const artifact_path = if (std.mem.eql(u8, package_root, "."))
+            try allocator.dupe(u8, "build/program.json")
+        else
+            try std.fs.path.join(allocator, &.{ package_root, "build", "program.json" });
+
+        var json_out = std.Io.Writer.Allocating.init(allocator);
+        defer json_out.deinit();
+        var json: std.json.Stringify = .{ .writer = &json_out.writer, .options = .{} };
+        try json.beginObject();
+        try json.objectField("backend");
+        try json.write("interpreter");
+        try json.objectField("package");
+        try json.write(package_name);
+        try json.objectField("entry_module");
+        try json.write(entry_module_path);
+        try json.objectField("entry_function");
+        try json.write("main");
+        try json.objectField("sources");
+        try json.beginArray();
+        for (source_paths) |path| {
+            try json.write(path);
+        }
+        try json.endArray();
+        try json.endObject();
+
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = artifact_path, .data = json_out.written() });
+        return artifact_path;
+    }
+
     fn defaultInitPackageName(allocator: std.mem.Allocator, io: Io) ![]const u8 {
         const cwd = try std.process.currentPathAlloc(io, allocator);
         const base = std.fs.path.basename(cwd);
@@ -623,6 +888,11 @@ pub const Context = struct {
     fn dependencyRoots(self: *const Context, allocator: std.mem.Allocator) !pkg.DependencyRoots {
         return self.dependency_roots orelse try pkg.defaultDependencyRoots(allocator);
     }
+};
+
+const EntryTarget = struct {
+    path: []const u8,
+    module_path: []const u8,
 };
 
 const LoadedDocuments = struct {
@@ -791,6 +1061,73 @@ test "context executes fetch for a package root" {
     const lock_text = try tmp.dir.readFileAlloc(std.testing.io, "app/lace.lock", std.testing.allocator, .unlimited);
     defer std.testing.allocator.free(lock_text);
     try std.testing.expect(std.mem.indexOf(u8, lock_text, "github.com/sam/user") != null);
+}
+
+test "context executes build json for a package root" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "pkg/src/app");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/build-demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/app/main.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/app/main.lace", .data =
+        "module app/main;\n\nfn main() -> Result<Void, AppError> {\n    return Ok(Void);\n}\n\npub error AppError {\n    placeholder,\n}\n" });
+
+    const package_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
+    defer std.testing.allocator.free(package_root);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .build, .args = &.{ "--json", package_root } },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "build/program.json") != null);
+
+    const artifact = try tmp.dir.readFileAlloc(std.testing.io, "pkg/build/program.json", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(artifact);
+    try std.testing.expect(std.mem.indexOf(u8, artifact, "\"backend\":\"interpreter\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, artifact, "\"entry_module\":\"app/main\"") != null);
+}
+
+test "context executes run and forwards args to main list parameter" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "pkg/src");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/run-demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/main.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/main.lace", .data =
+        "module main;\n\npub error AppError {\n    placeholder,\n}\n\nfn main(\n    args: List<String>,\n) -> Result<Void, AppError> {\n    print(value: args);\n    return Ok(Void);\n}\n" });
+
+    const package_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
+    defer std.testing.allocator.free(package_root);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .run, .args = &.{ package_root, "--", "one", "two" } },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expectEqualStrings("[one, two]", stdout.written());
 }
 
 test "context executes types json for a package root" {

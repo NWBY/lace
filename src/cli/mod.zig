@@ -66,6 +66,18 @@ pub const FetchOptions = struct {
     path: ?[]const u8 = null,
 };
 
+pub const BuildOptions = struct {
+    path: ?[]const u8 = null,
+    json: bool = false,
+    release: bool = false,
+    target: ?[]const u8 = null,
+};
+
+pub const RunOptions = struct {
+    path: ?[]const u8 = null,
+    forwarded_args: []const []const u8 = &.{},
+};
+
 pub const TypesOptions = struct {
     path: ?[]const u8 = null,
     json: bool = false,
@@ -125,6 +137,15 @@ pub const FetchOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
 };
+pub const BuildOptionsError = error{
+    MissingTargetValue,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
+pub const RunOptionsError = error{
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const TypesOptionsError = error{
     MissingJsonFlag,
     UnexpectedArgument,
@@ -175,7 +196,7 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace types --json`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace types --json`, `lace ast --json <file>`, `lace build`, `lace run`, `lace diag --json`, and `lace --help`.\n");
 }
 
 pub fn parseInitOptions(args: []const []const u8) InitOptionsError!InitOptions {
@@ -238,6 +259,58 @@ pub fn parseFetchOptions(args: []const []const u8) FetchOptionsError!FetchOption
         return error.UnexpectedArgument;
     }
     return .{ .path = path };
+}
+
+pub fn parseBuildOptions(args: []const []const u8) BuildOptionsError!BuildOptions {
+    var options: BuildOptions = .{};
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--json")) {
+            options.json = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--release")) {
+            options.release = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--target")) {
+            index += 1;
+            if (index >= args.len) return error.MissingTargetValue;
+            options.target = args[index];
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        if (options.path == null) {
+            options.path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    return options;
+}
+
+pub fn parseRunOptions(args: []const []const u8) RunOptionsError!RunOptions {
+    var options: RunOptions = .{};
+    var forwarded_start: ?usize = null;
+    for (args, 0..) |arg, index| {
+        if (std.mem.eql(u8, arg, "--")) {
+            forwarded_start = index + 1;
+            break;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        if (options.path == null) {
+            options.path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    options.forwarded_args = if (forwarded_start) |start| args[start..] else &.{};
+    return options;
 }
 
 pub fn parseTypesOptions(args: []const []const u8) TypesOptionsError!TypesOptions {
@@ -366,6 +439,8 @@ test "help output lists check command" {
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace new") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fetch") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace types") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace build") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace run") != null);
 }
 
 test "parse init options supports name and lib" {
@@ -400,6 +475,29 @@ test "parse fetch options allows package default and one path" {
 
     try std.testing.expectError(error.UnexpectedArgument, parseFetchOptions(&.{ "a", "b" }));
     try std.testing.expectError(error.UnsupportedFlag, parseFetchOptions(&.{"--json"}));
+}
+
+test "parse build options supports json release and target" {
+    const options = try parseBuildOptions(&.{ "--json", "--release", "--target", "linux-amd64", "examples/check_demo" });
+    try std.testing.expect(options.json);
+    try std.testing.expect(options.release);
+    try std.testing.expectEqualStrings("linux-amd64", options.target.?);
+    try std.testing.expectEqualStrings("examples/check_demo", options.path.?);
+
+    try std.testing.expectError(error.MissingTargetValue, parseBuildOptions(&.{"--target"}));
+    try std.testing.expectError(error.UnsupportedFlag, parseBuildOptions(&.{"--bad"}));
+}
+
+test "parse run options supports forwarded args" {
+    const options = try parseRunOptions(&.{ "examples/check_demo", "--", "one", "two" });
+    try std.testing.expectEqualStrings("examples/check_demo", options.path.?);
+    try std.testing.expectEqual(@as(usize, 2), options.forwarded_args.len);
+    try std.testing.expectEqualStrings("one", options.forwarded_args[0]);
+    try std.testing.expectEqualStrings("two", options.forwarded_args[1]);
+
+    const default_options = try parseRunOptions(&.{"--"});
+    try std.testing.expectEqual(@as(?[]const u8, null), default_options.path);
+    try std.testing.expectEqual(@as(usize, 0), default_options.forwarded_args.len);
 }
 
 test "parse types options requires json and allows an optional path" {

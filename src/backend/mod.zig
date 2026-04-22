@@ -2,6 +2,7 @@ pub const ExecutionError = @import("interpreter.zig").ExecutionError;
 pub const Program = @import("interpreter.zig").Program;
 pub const Value = @import("interpreter.zig").Value;
 pub const prepareProgram = @import("interpreter.zig").prepareProgram;
+pub const runEntry = @import("interpreter.zig").runEntry;
 pub const runFunction = @import("interpreter.zig").runFunction;
 pub const runMain = @import("interpreter.zig").runMain;
 

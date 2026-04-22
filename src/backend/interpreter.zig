@@ -24,6 +24,7 @@ pub const Value = union(enum) {
     bool: bool,
     int: i64,
     string: []const u8,
+    list: []const Value,
     struct_instance: StructInstance,
     variant: VariantInstance,
 };
@@ -132,6 +133,37 @@ pub fn prepareProgram(
 pub fn runMain(program: *const Program, writer: *Io.Writer) ExecutionError!Value {
     const module_index = program.moduleIndex("main") orelse return error.NoSuchModule;
     return runFunction(program, writer, module_index, "main", &.{});
+}
+
+pub fn runEntry(
+    program: *const Program,
+    writer: *Io.Writer,
+    module_path: []const u8,
+    function_name: []const u8,
+    forwarded_args: []const []const u8,
+) ExecutionError!Value {
+    const module_index = program.moduleIndex(module_path) orelse return error.NoSuchModule;
+    const function_surface = types.lookupFunction(program.surface, module_path, function_name) orelse return error.NoSuchFunction;
+
+    if (function_surface.params.len == 0) {
+        return runFunction(program, writer, module_index, function_name, &.{});
+    }
+
+    if (function_surface.params.len == 1 and
+        std.mem.eql(u8, function_surface.params[0].name, "args") and
+        isStringListType(function_surface.params[0].ty))
+    {
+        const list_values = try program.allocator.alloc(Value, forwarded_args.len);
+        for (forwarded_args, 0..) |arg, index| {
+            list_values[index] = .{ .string = try program.allocator.dupe(u8, arg) };
+        }
+        return runFunction(program, writer, module_index, function_name, &.{.{
+            .name = "args",
+            .value = .{ .list = list_values },
+        }});
+    }
+
+    return error.UnsupportedOperation;
 }
 
 pub fn runFunction(
@@ -892,6 +924,10 @@ fn valueEql(left: Value, right: Value) bool {
         .bool => |value| switch (right) { .bool => |other| value == other, else => false },
         .int => |value| switch (right) { .int => |other| value == other, else => false },
         .string => |value| switch (right) { .string => |other| std.mem.eql(u8, value, other), else => false },
+        .list => |value| switch (right) {
+            .list => |other| listEql(value, other),
+            else => false,
+        },
         .struct_instance => |value| switch (right) {
             .struct_instance => |other| structEql(value, other),
             else => false,
@@ -947,8 +983,33 @@ fn writeValue(writer: *Io.Writer, value: Value) ExecutionError!void {
         .bool => |actual| try writer.writeAll(if (actual) "true" else "false"),
         .int => |actual| try writer.print("{d}", .{actual}),
         .string => |actual| try writer.writeAll(actual),
+        .list => |items| {
+            try writer.writeByte('[');
+            for (items, 0..) |item, index| {
+                if (index > 0) {
+                    try writer.writeAll(", ");
+                }
+                try writeValue(writer, item);
+            }
+            try writer.writeByte(']');
+        },
         .struct_instance, .variant => return error.UnsupportedOperation,
     }
+}
+
+fn listEql(left: []const Value, right: []const Value) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_item, right_item| {
+        if (!valueEql(left_item, right_item)) return false;
+    }
+    return true;
+}
+
+fn isStringListType(ty: types.Type) bool {
+    return switch (ty) {
+        .generic => |value| value.kind == .list and value.args.len == 1 and value.args[0].eql(.{ .primitive = .string }),
+        else => false,
+    };
 }
 
 fn decodeStringLiteral(allocator: std.mem.Allocator, raw: []const u8) ExecutionError![]const u8 {
