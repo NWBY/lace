@@ -3,11 +3,17 @@ const Io = std.Io;
 
 pub const BuildInfo = @import("manifest.zig").BuildInfo;
 pub const Dependency = @import("manifest.zig").Dependency;
+pub const DependencyRoots = @import("deps.zig").DependencyRoots;
+pub const FetchResult = @import("deps.zig").FetchResult;
 pub const LockPackage = @import("manifest.zig").LockPackage;
 pub const Lockfile = @import("manifest.zig").Lockfile;
 pub const Manifest = @import("manifest.zig").Manifest;
 pub const NewPackageOptions = @import("scaffold.zig").NewPackageOptions;
 pub const ScaffoldOptions = @import("scaffold.zig").ScaffoldOptions;
+pub const collectWorkspaceSourceFiles = @import("deps.zig").collectWorkspaceSourceFiles;
+pub const collectWorkspaceSources = @import("deps.zig").collectWorkspaceSources;
+pub const defaultDependencyRoots = @import("deps.zig").defaultDependencyRoots;
+pub const fetchDependencies = @import("deps.zig").fetchDependencies;
 pub const initPackage = @import("scaffold.zig").initPackage;
 pub const newPackage = @import("scaffold.zig").newPackage;
 pub const parseLockfile = @import("manifest.zig").parseLockfile;
@@ -94,6 +100,7 @@ test "package loader finds lace files recursively" {
 }
 
 test {
+    _ = @import("deps.zig");
     _ = @import("manifest.zig");
     _ = @import("scaffold.zig");
 }

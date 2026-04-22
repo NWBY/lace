@@ -11,6 +11,7 @@ const syntax = @import("syntax/mod.zig");
 pub const Context = struct {
     allocator: std.mem.Allocator,
     io: ?Io,
+    dependency_roots: ?pkg.DependencyRoots = null,
     files: source.Manager = .{},
     diagnostics: diag.Store = .{},
 
@@ -64,6 +65,7 @@ pub const Context = struct {
             .check => return self.executeCheckCommand(stdout, stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             .diag => return self.executeDiagCommand(stdout, stderr, command.args),
+            .fetch => return self.executeFetchCommand(stderr, command.args),
             .new => return self.executeNewCommand(stderr, command.args),
             else => {
                 _ = command.args;
@@ -89,7 +91,7 @@ pub const Context = struct {
         };
 
         var diagnostics: diag.Store = .{};
-        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path)) catch |err| switch (err) {
+        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path), false) catch |err| switch (err) {
             error.IoUnavailable => {
                 try stderr.writeAll("`lace fmt` requires process I/O for package traversal.\n");
                 return 1;
@@ -150,7 +152,7 @@ pub const Context = struct {
         };
 
         var diagnostics: diag.Store = .{};
-        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path)) catch |err| switch (err) {
+        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path), true) catch |err| switch (err) {
             error.IoUnavailable => {
                 try stderr.writeAll("`lace check` requires process I/O for package traversal.\n");
                 return 1;
@@ -244,7 +246,7 @@ pub const Context = struct {
         };
 
         var diagnostics: diag.Store = .{};
-        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path)) catch |err| switch (err) {
+        const loaded = self.loadDocuments(arena, &diagnostics, sourceTargetFromPath(options.path), true) catch |err| switch (err) {
             error.IoUnavailable => {
                 try stderr.writeAll("`lace diag` requires process I/O for package traversal.\n");
                 return 1;
@@ -271,6 +273,38 @@ pub const Context = struct {
         }
 
         return if (diagnostics.count() == 0) 0 else 1;
+    }
+
+    fn executeFetchCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseFetchOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace fetch [path]\n");
+            switch (err) {
+                error.UnexpectedArgument => try stderr.writeAll("`lace fetch` accepts at most one package path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace fetch` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace fetch` requires process I/O.\n");
+            return 1;
+        };
+
+        const roots = try self.dependencyRoots(arena);
+        var diagnostics: diag.Store = .{};
+        const package_root = options.path orelse ".";
+        const result = try pkg.fetchDependencies(arena, &diagnostics, io, package_root, roots);
+
+        if (result == null or diagnostics.count() != 0) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        return 0;
     }
 
     fn executeInitCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
@@ -378,7 +412,38 @@ pub const Context = struct {
         arena: std.mem.Allocator,
         diagnostics: *diag.Store,
         target: pkg.SourceTarget,
+        include_dependencies: bool,
     ) !LoadedDocuments {
+        if (include_dependencies) {
+            switch (target) {
+                .package => |package_target| {
+                    const workspace_sources = try pkg.collectWorkspaceSources(arena, diagnostics, self.io orelse return error.IoUnavailable, package_target, try self.dependencyRoots(arena));
+                    if (workspace_sources.len == 0) {
+                        return error.NoSourceFiles;
+                    }
+
+                    var workspace_paths: std.ArrayList([]const u8) = .empty;
+                    var workspace_documents: std.ArrayList(syntax.Tree.Document) = .empty;
+                    for (workspace_sources) |entry| {
+                        const contents = try std.Io.Dir.cwd().readFileAlloc(self.io.?, entry.actual_path, arena, .unlimited);
+                        const file_id = try self.addSource(entry.logical_path, contents);
+                        try workspace_paths.append(arena, entry.logical_path);
+                        const document = syntax.parseFile(arena, diagnostics, self.sourceFile(file_id)) catch |err| switch (err) {
+                            error.InvalidSyntax => continue,
+                            error.OutOfMemory => return err,
+                        };
+                        try workspace_documents.append(arena, document);
+                    }
+
+                    return .{
+                        .paths = try workspace_paths.toOwnedSlice(arena),
+                        .documents = try workspace_documents.toOwnedSlice(arena),
+                    };
+                },
+                .single_file => {},
+            }
+        }
+
         const paths = try pkg.collectSourceFiles(arena, self.io, target);
         if (paths.len == 0) {
             return error.NoSourceFiles;
@@ -404,6 +469,10 @@ pub const Context = struct {
         const cwd = try std.process.currentPathAlloc(io, allocator);
         const base = std.fs.path.basename(cwd);
         return try std.fmt.allocPrint(allocator, "example.com/{s}", .{base});
+    }
+
+    fn dependencyRoots(self: *const Context, allocator: std.mem.Allocator) !pkg.DependencyRoots {
+        return self.dependency_roots orelse try pkg.defaultDependencyRoots(allocator);
     }
 };
 
@@ -529,4 +598,51 @@ test "context executes diag json for an invalid loaded source file" {
         "{\"diagnostics\":[{\"code\":\"T1105\",\"level\":\"error\",\"message\":\"If conditions must have type `Bool`\",\"file\":\"src/bad.lace\",\"span\":{\"start_line\":4,\"start_col\":8,\"end_line\":4,\"end_col\":9},\"symbol\":null,\"details\":[],\"suggested_fixes\":[]}]}\n",
         stdout.written(),
     );
+}
+
+test "context executes fetch for a package root" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const tmp_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer std.testing.allocator.free(tmp_root);
+
+    try tmp.dir.createDirPath(std.testing.io, "registry/github.com/sam/user/0.1.0/src");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/user\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/src/model.lace", .data =
+        "module github.com/sam/user/model;\n" });
+
+    try tmp.dir.createDirPath(std.testing.io, "app");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\"github.com/sam/user\" = \"0.1.0\"\n" });
+
+    const registry_root = try std.fs.path.join(std.testing.allocator, &.{ tmp_root, "registry" });
+    defer std.testing.allocator.free(registry_root);
+    const cache_root = try std.fs.path.join(std.testing.allocator, &.{ tmp_root, "cache" });
+    defer std.testing.allocator.free(cache_root);
+    const app_root = try std.fs.path.join(std.testing.allocator, &.{ tmp_root, "app" });
+    defer std.testing.allocator.free(app_root);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+    context.dependency_roots = .{ .registry_root = registry_root, .cache_root = cache_root };
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .fetch, .args = &.{app_root} },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("", stdout.written());
+    try std.testing.expectEqualStrings("", stderr.written());
+
+    const lock_text = try tmp.dir.readFileAlloc(std.testing.io, "app/lace.lock", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(lock_text);
+    try std.testing.expect(std.mem.indexOf(u8, lock_text, "github.com/sam/user") != null);
 }
