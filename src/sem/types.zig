@@ -538,6 +538,14 @@ fn findNamedType(
         };
     }
 
+    if (lookupStdlibModule(module_path)) |module| {
+        for (module.types) |named_type| {
+            if (std.mem.eql(u8, named_type.name, type_name)) {
+                return named_type;
+            }
+        }
+    }
+
     return null;
 }
 
