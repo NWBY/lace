@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 015: Dependency Resolution and `lace fetch`
 
 ## Goal

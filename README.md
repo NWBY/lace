@@ -23,15 +23,18 @@ Implemented so far:
 - `Result`/`Option` semantics, exhaustive `match`, and checked `bind`
 - manifest and lockfile parse/serialize support
 - `lace init` and `lace new` project scaffolding
+- exact-version dependency resolution and shared cache fetch
+- dependency-aware package checking from `lace.lock` and `~/.lace/pkg/`
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
+- `lace fetch [path]`
 - `lace ast --json <file>`
 
 In progress next:
 
-- dependency resolution and fetch
 - exported type manifests
+- dependency editing commands
 
 ## Goals
 
@@ -52,6 +55,7 @@ Implemented so far:
 zig build run -- --help
 zig build run -- init --lib
 zig build run -- new github.com/sam/sample_app
+zig build run -- fetch examples/check_demo
 zig build run -- fmt examples/check_demo
 zig build run -- check --json examples/check_demo
 zig build run -- diag --json examples/check_demo
@@ -77,6 +81,13 @@ zig build run -- init --name github.com/sam/my_lib --lib
 ```sh
 zig build run -- new github.com/sam/my_app
 zig build run -- new github.com/sam/my_lib --lib
+```
+
+### fetch
+
+```sh
+zig build run -- fetch
+zig build run -- fetch path/to/package
 ```
 
 ### fmt
@@ -117,7 +128,7 @@ src/
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, resolution, typing, and result semantics
-  pkg/            source discovery, manifest parsing, and scaffolding
+  pkg/            source discovery, manifests, scaffolding, and dependency fetch
   backend/        execution backend placeholder
 examples/         sample Lace source files
 todo/             ordered implementation roadmap
@@ -144,6 +155,7 @@ The current sequence starts with:
 12. result and option semantics
 13. CLI for fmt, check, ast, and diag
 14. manifest, lockfile, and project scaffolding
+15. dependency resolution and fetch
 
 ## Design Direction
 
