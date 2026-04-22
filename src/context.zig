@@ -71,7 +71,7 @@ pub const Context = struct {
             else => {
                 _ = command.args;
                 try stderr.print("`lace {s}` is not implemented yet.\n", .{command.kind.label()});
-                try stderr.writeAll("Start with `lace --help` to see the current scaffold.\n");
+                try stderr.writeAll("Start with `lace --help` to see the implemented commands.\n");
                 return 1;
             },
         }
@@ -757,14 +757,11 @@ test "context executes fetch for a package root" {
     defer std.testing.allocator.free(tmp_root);
 
     try tmp.dir.createDirPath(std.testing.io, "registry/github.com/sam/user/0.1.0/src");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/lace.toml", .data =
-        "[package]\nname = \"github.com/sam/user\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n" });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/src/model.lace", .data =
-        "module github.com/sam/user/model;\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/lace.toml", .data = "[package]\nname = \"github.com/sam/user\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "registry/github.com/sam/user/0.1.0/src/model.lace", .data = "module github.com/sam/user/model;\n" });
 
     try tmp.dir.createDirPath(std.testing.io, "app");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app/lace.toml", .data =
-        "[package]\nname = \"github.com/sam/app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\"github.com/sam/user\" = \"0.1.0\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app/lace.toml", .data = "[package]\nname = \"github.com/sam/app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\"github.com/sam/user\" = \"0.1.0\"\n" });
 
     const registry_root = try std.fs.path.join(std.testing.allocator, &.{ tmp_root, "registry" });
     defer std.testing.allocator.free(registry_root);
@@ -801,10 +798,8 @@ test "context executes types json for a package root" {
     defer tmp.cleanup();
 
     try tmp.dir.createDirPath(std.testing.io, "pkg/src/app");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
-        "[package]\nname = \"github.com/sam/signup\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/app/signup.lace\"\n" });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/app/signup.lace", .data =
-        "module app/signup;\n\npub struct User {\n    email: String,\n}\n\npub error SignupError {\n    duplicate_email(email: String),\n}\n\npub fn signup(\n    input: User,\n) -> Result<User, SignupError> {\n    return Ok(input);\n}\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data = "[package]\nname = \"github.com/sam/signup\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/app/signup.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/app/signup.lace", .data = "module app/signup;\n\npub struct User {\n    email: String,\n}\n\npub error SignupError {\n    duplicate_email(email: String),\n}\n\npub fn signup(\n    input: User,\n) -> Result<User, SignupError> {\n    return Ok(input);\n}\n" });
 
     const tmp_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
     defer std.testing.allocator.free(tmp_root);
