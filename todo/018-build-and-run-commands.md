@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 018: `lace build` and `lace run`
 
 ## Goal

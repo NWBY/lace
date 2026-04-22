@@ -27,6 +27,8 @@ Implemented so far:
 - dependency-aware package checking from `lace.lock` and `~/.lace/pkg/`
 - exported type manifests via `lace types --json`
 - interpreter backend for the current Lace MVP subset
+- `lace build [--json] [path]`
+- `lace run [path] [-- args...]`
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
@@ -36,8 +38,8 @@ Implemented so far:
 
 In progress next:
 
-- build and run commands
 - test runner integration
+- dependency editing commands
 
 ## Goals
 
@@ -63,6 +65,8 @@ zig build run -- fmt examples/check_demo
 zig build run -- check --json examples/check_demo
 zig build run -- diag --json examples/check_demo
 zig build run -- types --json examples/check_demo
+zig build run -- build --json examples/check_demo
+zig build run -- run examples/check_demo -- one two
 zig build run -- ast --json examples/demo.lace
 ```
 
@@ -92,6 +96,18 @@ zig build run -- new github.com/sam/my_lib --lib
 ```sh
 zig build run -- fetch
 zig build run -- fetch path/to/package
+```
+
+### build
+
+```sh
+zig build run -- build --json examples/check_demo
+```
+
+### run
+
+```sh
+zig build run -- run examples/check_demo -- one two
 ```
 
 ### fmt
@@ -168,6 +184,7 @@ The current sequence starts with:
 15. dependency resolution and fetch
 16. types manifest json
 17. backend mvp execution model
+18. build and run commands
 
 ## Design Direction
 
