@@ -25,16 +25,18 @@ Implemented so far:
 - `lace init` and `lace new` project scaffolding
 - exact-version dependency resolution and shared cache fetch
 - dependency-aware package checking from `lace.lock` and `~/.lace/pkg/`
+- exported type manifests via `lace types --json`
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
 - `lace fetch [path]`
+- `lace types --json [path]`
 - `lace ast --json <file>`
 
 In progress next:
 
-- exported type manifests
-- dependency editing commands
+- backend execution model
+- build and run commands
 
 ## Goals
 
@@ -59,6 +61,7 @@ zig build run -- fetch examples/check_demo
 zig build run -- fmt examples/check_demo
 zig build run -- check --json examples/check_demo
 zig build run -- diag --json examples/check_demo
+zig build run -- types --json examples/check_demo
 zig build run -- ast --json examples/demo.lace
 ```
 
@@ -111,6 +114,12 @@ zig build run -- check --json examples/check_demo
 zig build run -- diag --json examples/check_demo
 ```
 
+### types
+
+```sh
+zig build run -- types --json examples/check_demo
+```
+
 ### ast
 
 ```sh
@@ -127,7 +136,7 @@ src/
   source.zig      source file loading and span tracking
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
-  sem/            semantic validation, resolution, typing, and result semantics
+  sem/            semantic validation, typing, result semantics, and type manifests
   pkg/            source discovery, manifests, scaffolding, and dependency fetch
   backend/        execution backend placeholder
 examples/         sample Lace source files
@@ -156,6 +165,7 @@ The current sequence starts with:
 13. CLI for fmt, check, ast, and diag
 14. manifest, lockfile, and project scaffolding
 15. dependency resolution and fetch
+16. types manifest json
 
 ## Design Direction
 

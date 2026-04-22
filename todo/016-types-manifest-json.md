@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 016: `lace types --json`
 
 ## Goal
