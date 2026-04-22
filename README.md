@@ -26,6 +26,7 @@ Implemented so far:
 - exact-version dependency resolution and shared cache fetch
 - dependency-aware package checking from `lace.lock` and `~/.lace/pkg/`
 - exported type manifests via `lace types --json`
+- interpreter backend for the current Lace MVP subset
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
@@ -35,8 +36,8 @@ Implemented so far:
 
 In progress next:
 
-- backend execution model
 - build and run commands
+- test runner integration
 
 ## Goals
 
@@ -138,8 +139,8 @@ src/
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, typing, result semantics, and type manifests
   pkg/            source discovery, manifests, scaffolding, and dependency fetch
-  backend/        execution backend placeholder
-examples/         sample Lace source files
+  backend/        interpreter backend for MVP execution
+  examples/         sample Lace source files
 todo/             ordered implementation roadmap
 ```
 
@@ -166,6 +167,7 @@ The current sequence starts with:
 14. manifest, lockfile, and project scaffolding
 15. dependency resolution and fetch
 16. types manifest json
+17. backend mvp execution model
 
 ## Design Direction
 
