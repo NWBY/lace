@@ -4,7 +4,7 @@ const Io = std.Io;
 pub const CommandKind = enum {
     help,
     init,
-    @"new",
+    new,
     fmt,
     check,
     build,
@@ -24,7 +24,7 @@ pub const CommandKind = enum {
         return switch (self) {
             .help => "help",
             .init => "init",
-            .@"new" => "new",
+            .new => "new",
             .fmt => "fmt",
             .check => "check",
             .build => "build",
@@ -93,7 +93,7 @@ pub const CommandInfo = struct {
 
 pub const command_list = [_]CommandInfo{
     .{ .kind = .init, .summary = "Initialize a package in the current directory." },
-    .{ .kind = .@"new", .summary = "Create a new package directory." },
+    .{ .kind = .new, .summary = "Create a new package directory." },
     .{ .kind = .fmt, .summary = "Format Lace source files canonically." },
     .{ .kind = .check, .summary = "Parse, resolve, and type-check a package." },
     .{ .kind = .build, .summary = "Compile the current package." },
@@ -163,12 +163,12 @@ pub fn parse(args: []const []const u8) ParseError!Command {
 
 pub fn writeHelp(writer: *Io.Writer) !void {
     try writer.writeAll("lace\n\n");
-    try writer.writeAll("Usage:\n");
-    try writer.writeAll("    lace <command> [options]\n\n");
-    try writer.writeAll("Commands:\n");
+    try writer.writeAll("Usage:\n\n");
+    try writer.writeAll("lace <command> [options]\n\n");
+    try writer.writeAll("Commands:\n\n");
 
     for (command_list) |command| {
-        try writer.print("    lace {s}\n        {s}\n", .{
+        try writer.print("lace {s} - {s}\n", .{
             command.kind.label(),
             command.summary,
         });
