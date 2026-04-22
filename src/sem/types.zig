@@ -141,6 +141,55 @@ pub const ResolveTypeError = error{
     WrongGenericArity,
 };
 
+pub fn renderTypeAlloc(
+    allocator: std.mem.Allocator,
+    current_module_path: []const u8,
+    ty: Type,
+) ![]u8 {
+    var out = std.Io.Writer.Allocating.init(allocator);
+    errdefer out.deinit();
+    try writeType(&out.writer, current_module_path, ty);
+    return try out.toOwnedSlice();
+}
+
+pub fn writeType(writer: *std.Io.Writer, current_module_path: []const u8, ty: Type) !void {
+    switch (ty) {
+        .primitive => |value| try writer.writeAll(switch (value) {
+            .bool => "Bool",
+            .int => "Int",
+            .float => "Float",
+            .string => "String",
+            .bytes => "Bytes",
+            .void => "Void",
+        }),
+        .type_parameter => |name| try writer.writeAll(name),
+        .named => |value| {
+            if (std.mem.eql(u8, value.module_path, current_module_path)) {
+                try writer.writeAll(value.name);
+            } else {
+                try writer.print("{s}.{s}", .{ value.module_path, value.name });
+            }
+        },
+        .generic => |value| {
+            try writer.writeAll(switch (value.kind) {
+                .option => "Option",
+                .result => "Result",
+                .list => "List",
+                .map => "Map",
+                .set => "Set",
+            });
+            try writer.writeByte('<');
+            for (value.args, 0..) |arg, index| {
+                if (index > 0) {
+                    try writer.writeAll(", ");
+                }
+                try writeType(writer, current_module_path, arg);
+            }
+            try writer.writeByte('>');
+        },
+    }
+}
+
 pub fn buildPackageSurface(
     allocator: std.mem.Allocator,
     sources: *const source.Manager,
@@ -794,4 +843,16 @@ test "package surface models user defined types and functions" {
         .{ .named = .{ .module_path = "app/signup", .name = "SignupError", .kind = .error_type } },
     } } }));
     try std.testing.expectEqualStrings("email", surface.modules[0].structs[0].fields[0].name);
+}
+
+test "type strings are canonical and module-aware" {
+    const allocator = std.testing.allocator;
+    const local_named: Type = .{ .named = .{ .module_path = "app/signup", .name = "User", .kind = .struct_type } };
+    const external_named: Type = .{ .named = .{ .module_path = "github.com/sam/user/model", .name = "User", .kind = .struct_type } };
+    const composite: Type = .{ .generic = .{ .kind = .result, .args = &.{ local_named, external_named } } };
+
+    const rendered = try renderTypeAlloc(allocator, "app/signup", composite);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings("Result<User, github.com/sam/user/model.User>", rendered);
 }

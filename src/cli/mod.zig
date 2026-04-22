@@ -66,6 +66,11 @@ pub const FetchOptions = struct {
     path: ?[]const u8 = null,
 };
 
+pub const TypesOptions = struct {
+    path: ?[]const u8 = null,
+    json: bool = false,
+};
+
 pub const CheckOptions = struct {
     path: ?[]const u8 = null,
     json: bool = false,
@@ -120,6 +125,11 @@ pub const FetchOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
 };
+pub const TypesOptionsError = error{
+    MissingJsonFlag,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const FormatOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
@@ -165,7 +175,7 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace types --json`, `lace ast --json <file>`, `lace diag --json`, and `lace --help`.\n");
 }
 
 pub fn parseInitOptions(args: []const []const u8) InitOptionsError!InitOptions {
@@ -228,6 +238,28 @@ pub fn parseFetchOptions(args: []const []const u8) FetchOptionsError!FetchOption
         return error.UnexpectedArgument;
     }
     return .{ .path = path };
+}
+
+pub fn parseTypesOptions(args: []const []const u8) TypesOptionsError!TypesOptions {
+    var options: TypesOptions = .{};
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            options.json = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        if (options.path == null) {
+            options.path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    if (!options.json) {
+        return error.MissingJsonFlag;
+    }
+    return options;
 }
 
 pub fn parseFormatOptions(args: []const []const u8) FormatOptionsError!FormatOptions {
@@ -333,6 +365,7 @@ test "help output lists check command" {
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace init") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace new") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace fetch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace types") != null);
 }
 
 test "parse init options supports name and lib" {
@@ -367,6 +400,20 @@ test "parse fetch options allows package default and one path" {
 
     try std.testing.expectError(error.UnexpectedArgument, parseFetchOptions(&.{ "a", "b" }));
     try std.testing.expectError(error.UnsupportedFlag, parseFetchOptions(&.{"--json"}));
+}
+
+test "parse types options requires json and allows an optional path" {
+    const default_options = try parseTypesOptions(&.{"--json"});
+    try std.testing.expect(default_options.json);
+    try std.testing.expectEqual(@as(?[]const u8, null), default_options.path);
+
+    const options = try parseTypesOptions(&.{ "--json", "examples/check_demo" });
+    try std.testing.expect(options.json);
+    try std.testing.expectEqualStrings("examples/check_demo", options.path.?);
+
+    try std.testing.expectError(error.MissingJsonFlag, parseTypesOptions(&.{"examples/check_demo"}));
+    try std.testing.expectError(error.UnexpectedArgument, parseTypesOptions(&.{ "--json", "a", "b" }));
+    try std.testing.expectError(error.UnsupportedFlag, parseTypesOptions(&.{ "--json", "--bad" }));
 }
 
 test "parse format options requires one path" {

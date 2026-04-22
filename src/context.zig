@@ -63,6 +63,7 @@ pub const Context = struct {
             .init => return self.executeInitCommand(stderr, command.args),
             .fmt => return self.executeFmtCommand(stderr, command.args),
             .check => return self.executeCheckCommand(stdout, stderr, command.args),
+            .types => return self.executeTypesCommand(stdout, stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             .diag => return self.executeDiagCommand(stdout, stderr, command.args),
             .fetch => return self.executeFetchCommand(stderr, command.args),
@@ -179,6 +180,76 @@ pub const Context = struct {
         }
 
         return if (diagnostics.count() == 0) 0 else 1;
+    }
+
+    fn executeTypesCommand(
+        self: *Context,
+        stdout: *Io.Writer,
+        stderr: *Io.Writer,
+        args: []const []const u8,
+    ) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseTypesOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace types --json [path]\n");
+            switch (err) {
+                error.MissingJsonFlag => try stderr.writeAll("`lace types` currently requires `--json`.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace types` accepts at most one path argument.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace types` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace types` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolveTypesPackageRoot(arena, io, options.path);
+        const manifest = self.loadManifestFromRoot(arena, io, package_root) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace types` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+        defer {
+            var manifest_mut = manifest;
+            manifest_mut.deinit(arena);
+        }
+
+        var diagnostics: diag.Store = .{};
+        const loaded = self.loadDocuments(arena, &diagnostics, .{ .package = .{ .root = package_root } }, true) catch |err| switch (err) {
+            error.IoUnavailable => {
+                try stderr.writeAll("`lace types` requires process I/O for package traversal.\n");
+                return 1;
+            },
+            error.NoSourceFiles => {
+                try stderr.writeAll("No Lace source files were found.\n");
+                return 1;
+            },
+            else => {
+                try stderr.print("Failed to load sources: {t}\n", .{err});
+                return 1;
+            },
+        };
+
+        const surface = try sem.typecheckDocuments(arena, &diagnostics, &self.files, loaded.documents);
+        if (diagnostics.count() != 0) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        const module_paths = try self.selectedTypesModules(arena, package_root, options.path, loaded.documents);
+        if (module_paths.len == 0) {
+            try stderr.writeAll("No exported modules matched the requested target.\n");
+            return 1;
+        }
+        try sem.renderTypesJson(arena, stdout, manifest.package.name, surface, module_paths);
+        try stdout.writeByte('\n');
+        return 0;
     }
 
     fn executeAstCommand(
@@ -471,6 +542,84 @@ pub const Context = struct {
         return try std.fmt.allocPrint(allocator, "example.com/{s}", .{base});
     }
 
+    fn resolveTypesPackageRoot(self: *const Context, allocator: std.mem.Allocator, io: Io, path: ?[]const u8) ![]const u8 {
+        if (path) |value| {
+            if (std.mem.endsWith(u8, value, ".lace")) {
+                return try self.findPackageRootForFile(allocator, io, value) orelse error.FileNotFound;
+            }
+            return allocator.dupe(u8, value);
+        }
+        return allocator.dupe(u8, ".");
+    }
+
+    fn findPackageRootForFile(self: *const Context, allocator: std.mem.Allocator, io: Io, file_path: []const u8) !?[]const u8 {
+        _ = self;
+        var current = try allocator.dupe(u8, std.fs.path.dirname(file_path) orelse ".");
+        while (true) {
+            const manifest_path = try std.fs.path.join(allocator, &.{ current, "lace.toml" });
+            defer allocator.free(manifest_path);
+
+            var file = std.Io.Dir.cwd().openFile(io, manifest_path, .{}) catch |err| switch (err) {
+                error.FileNotFound, error.NotDir => null,
+                else => return err,
+            };
+            if (file) |*opened| {
+                opened.close(io);
+                return current;
+            }
+
+            const parent = std.fs.path.dirname(current) orelse return null;
+            if (std.mem.eql(u8, parent, current)) {
+                return null;
+            }
+            current = try allocator.dupe(u8, parent);
+        }
+    }
+
+    fn loadManifestFromRoot(self: *const Context, allocator: std.mem.Allocator, io: Io, root: []const u8) !pkg.Manifest {
+        _ = self;
+        const manifest_path = try std.fs.path.join(allocator, &.{ root, "lace.toml" });
+        defer allocator.free(manifest_path);
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, allocator, .unlimited) catch |err| switch (err) {
+            error.FileNotFound => return error.FileNotFound,
+            else => return err,
+        };
+        defer allocator.free(contents);
+        return try pkg.parseManifest(allocator, contents);
+    }
+
+    fn selectedTypesModules(
+        self: *const Context,
+        allocator: std.mem.Allocator,
+        package_root: []const u8,
+        path: ?[]const u8,
+        documents: []const syntax.Tree.Document,
+    ) ![]const []const u8 {
+        var modules = std.ArrayList([]const u8).empty;
+        if (path) |value| {
+            if (std.mem.endsWith(u8, value, ".lace")) {
+                for (documents) |document| {
+                    const file = self.sourceFile(document.file_id);
+                    if (std.mem.eql(u8, file.path, value)) {
+                        try modules.append(allocator, file.source[document.module_decl.path.span.start..document.module_decl.path.span.end]);
+                        return try modules.toOwnedSlice(allocator);
+                    }
+                }
+                return try modules.toOwnedSlice(allocator);
+            }
+        }
+
+        const prefix = if (std.mem.eql(u8, package_root, ".")) "src/" else try std.fs.path.join(allocator, &.{ package_root, "src" });
+        defer if (!std.mem.eql(u8, package_root, ".")) allocator.free(prefix);
+        for (documents) |document| {
+            const file = self.sourceFile(document.file_id);
+            if (std.mem.startsWith(u8, file.path, prefix)) {
+                try modules.append(allocator, file.source[document.module_decl.path.span.start..document.module_decl.path.span.end]);
+            }
+        }
+        return try modules.toOwnedSlice(allocator);
+    }
+
     fn dependencyRoots(self: *const Context, allocator: std.mem.Allocator) !pkg.DependencyRoots {
         return self.dependency_roots orelse try pkg.defaultDependencyRoots(allocator);
     }
@@ -645,4 +794,38 @@ test "context executes fetch for a package root" {
     const lock_text = try tmp.dir.readFileAlloc(std.testing.io, "app/lace.lock", std.testing.allocator, .unlimited);
     defer std.testing.allocator.free(lock_text);
     try std.testing.expect(std.mem.indexOf(u8, lock_text, "github.com/sam/user") != null);
+}
+
+test "context executes types json for a package root" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "pkg/src/app");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/signup\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/app/signup.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/app/signup.lace", .data =
+        "module app/signup;\n\npub struct User {\n    email: String,\n}\n\npub error SignupError {\n    duplicate_email(email: String),\n}\n\npub fn signup(\n    input: User,\n) -> Result<User, SignupError> {\n    return Ok(input);\n}\n" });
+
+    const tmp_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
+    defer std.testing.allocator.free(tmp_root);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .types, .args = &.{ "--json", tmp_root } },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expectEqualStrings(
+        "{\"package\":\"github.com/sam/signup\",\"module\":\"app/signup\",\"structs\":[{\"name\":\"User\",\"fields\":[{\"name\":\"email\",\"type\":\"String\",\"optional\":false}]}],\"enums\":[],\"errors\":[{\"name\":\"SignupError\",\"variants\":[{\"name\":\"duplicate_email\",\"fields\":[{\"name\":\"email\",\"type\":\"String\"}]}]}],\"functions\":[{\"name\":\"signup\",\"params\":[{\"name\":\"input\",\"type\":\"User\"}],\"returns\":\"Result<User, SignupError>\"}]}\n",
+        stdout.written(),
+    );
 }
