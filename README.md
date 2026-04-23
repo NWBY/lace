@@ -27,8 +27,13 @@ Implemented so far:
 - dependency-aware package checking from `lace.lock` and `~/.lace/pkg/`
 - exported type manifests via `lace types --json`
 - interpreter backend for the current Lace MVP subset
+- dependency editing commands for add/remove/update/clean
 - `lace build [--json] [path]`
 - `lace run [path] [-- args...]`
+- `lace add <package@version> [path]`
+- `lace remove <package> [path]`
+- `lace update [path]`
+- `lace clean [path]`
 - built-in test discovery and assertion runner
 - `lace fmt [path]`
 - `lace check [--json] [path]`
@@ -40,8 +45,8 @@ Implemented so far:
 
 In progress next:
 
-- dependency editing commands
 - publish and registry workflow
+- reproducible publish/install pipeline
 
 ## Goals
 
@@ -62,6 +67,10 @@ Implemented so far:
 zig build run -- --help
 zig build run -- init --lib
 zig build run -- new github.com/sam/sample_app
+zig build run -- add github.com/sam/store@0.4.0 path/to/package
+zig build run -- remove github.com/sam/store path/to/package
+zig build run -- update path/to/package
+zig build run -- clean path/to/package
 zig build run -- fetch examples/check_demo
 zig build run -- fmt examples/check_demo
 zig build run -- check --json examples/check_demo
@@ -99,6 +108,15 @@ zig build run -- new github.com/sam/my_lib --lib
 ```sh
 zig build run -- fetch
 zig build run -- fetch path/to/package
+```
+
+### add/remove/update/clean
+
+```sh
+zig build run -- add github.com/sam/store@0.4.0 path/to/package
+zig build run -- remove github.com/sam/store path/to/package
+zig build run -- update path/to/package
+zig build run -- clean path/to/package
 ```
 
 ### build
@@ -164,7 +182,7 @@ src/
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, typing, result semantics, and type manifests
-  pkg/            source discovery, manifests, scaffolding, dependency fetch, and test loading
+  pkg/            source discovery, manifests, scaffolding, dependency editing, fetch, and test loading
   backend/        interpreter backend and test execution
   examples/         sample Lace source files
 todo/             ordered implementation roadmap
@@ -196,6 +214,7 @@ The current sequence starts with:
 17. backend mvp execution model
 18. build and run commands
 19. built-in test runner
+20. dependency editing commands
 
 ## Design Direction
 
