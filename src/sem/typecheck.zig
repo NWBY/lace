@@ -78,6 +78,7 @@ const Checker = struct {
         for (self.document.items) |item| switch (item) {
             .const_decl => |decl| try self.checkTopLevelConst(decl),
             .function_decl => |decl| try self.checkFunction(decl),
+            .test_decl => |decl| try self.checkTest(decl),
             else => {},
         };
     }
@@ -104,6 +105,16 @@ const Checker = struct {
             try self.declareLocal(self.text(param.name), param_type);
         }
 
+        try self.checkBlock(decl.body, false);
+    }
+
+    fn checkTest(self: *Checker, decl: tree.TestDecl) CheckError!void {
+        const previous_return_type = self.current_return_type;
+        self.current_return_type = null;
+        defer self.current_return_type = previous_return_type;
+
+        try self.pushScope();
+        defer self.popScope();
         try self.checkBlock(decl.body, false);
     }
 

@@ -10,6 +10,7 @@ pub const Lockfile = @import("manifest.zig").Lockfile;
 pub const Manifest = @import("manifest.zig").Manifest;
 pub const NewPackageOptions = @import("scaffold.zig").NewPackageOptions;
 pub const ScaffoldOptions = @import("scaffold.zig").ScaffoldOptions;
+pub const collectTestSourceFiles = @import("testsources.zig").collectTestSourceFiles;
 pub const collectWorkspaceSourceFiles = @import("deps.zig").collectWorkspaceSourceFiles;
 pub const collectWorkspaceSources = @import("deps.zig").collectWorkspaceSources;
 pub const defaultDependencyRoots = @import("deps.zig").defaultDependencyRoots;
@@ -103,4 +104,5 @@ test {
     _ = @import("deps.zig");
     _ = @import("manifest.zig");
     _ = @import("scaffold.zig");
+    _ = @import("testsources.zig");
 }

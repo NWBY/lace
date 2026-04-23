@@ -1001,7 +1001,7 @@ fn armBodyEnd(body: tree.ArmBody) source.Span {
 
 fn isAccessSegmentTag(tag: token.Tag) bool {
     return switch (tag) {
-        .identifier, .kw_none, .kw_some, .kw_ok, .kw_err => true,
+        .identifier, .kw_none, .kw_some, .kw_ok, .kw_err, .kw_true, .kw_false => true,
         else => false,
     };
 }

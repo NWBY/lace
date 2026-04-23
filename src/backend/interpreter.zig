@@ -8,6 +8,7 @@ const source = @import("../source.zig");
 const tree = @import("../syntax/tree.zig");
 
 pub const ExecutionError = std.mem.Allocator.Error || Io.Writer.Error || types.ResolveTypeError || error{
+    AssertionFailed,
     DiagnosticsPresent,
     NoSuchFunction,
     NoSuchModule,
@@ -17,6 +18,27 @@ pub const ExecutionError = std.mem.Allocator.Error || Io.Writer.Error || types.R
     InvalidPattern,
     InvalidIntParse,
     BindElseDidNotExit,
+};
+
+pub const TestStatus = enum {
+    passed,
+    failed,
+};
+
+pub const TestCase = struct {
+    module_index: usize,
+    module_path: []const u8,
+    file_path: []const u8,
+    name: []const u8,
+    decl: tree.TestDecl,
+};
+
+pub const TestResult = struct {
+    module_path: []const u8,
+    file_path: []const u8,
+    name: []const u8,
+    status: TestStatus,
+    message: ?[]const u8 = null,
 };
 
 pub const Value = union(enum) {
@@ -166,6 +188,87 @@ pub fn runEntry(
     return error.UnsupportedOperation;
 }
 
+pub fn discoverTests(
+    allocator: std.mem.Allocator,
+    program: *const Program,
+    target: ?[]const u8,
+) ExecutionError![]const TestCase {
+    var tests = std.ArrayList(TestCase).empty;
+    for (program.modules, 0..) |module, module_index| {
+        const file_path = program.sources.getFile(module.document.file_id).path;
+        if (!std.mem.endsWith(u8, file_path, "_test.lace")) continue;
+        if (!testMatchesTarget(module, file_path, target)) continue;
+
+        for (module.document.items) |item| {
+            if (item != .test_decl) continue;
+            const raw_name = textAt(program.sources, module.document.file_id, item.test_decl.name);
+            try tests.append(allocator, .{
+                .module_index = module_index,
+                .module_path = module.path,
+                .file_path = file_path,
+                .name = try decodeStringLiteral(allocator, raw_name),
+                .decl = item.test_decl,
+            });
+        }
+    }
+
+    std.mem.sort(TestCase, tests.items, {}, struct {
+        fn lessThan(_: void, left: TestCase, right: TestCase) bool {
+            return switch (std.mem.order(u8, left.file_path, right.file_path)) {
+                .lt => true,
+                .gt => false,
+                .eq => std.mem.order(u8, left.name, right.name) == .lt,
+            };
+        }
+    }.lessThan);
+
+    return try tests.toOwnedSlice(allocator);
+}
+
+pub fn runTestCase(
+    program: *const Program,
+    writer: *Io.Writer,
+    test_case: TestCase,
+) ExecutionError!TestResult {
+    var executor = Executor{
+        .program = program,
+        .writer = writer,
+    };
+
+    executor.runTest(test_case.module_index, test_case.decl) catch |err| switch (err) {
+        error.AssertionFailed => return .{
+            .module_path = test_case.module_path,
+            .file_path = test_case.file_path,
+            .name = test_case.name,
+            .status = .failed,
+            .message = executor.last_assertion_message orelse "assertion failed",
+        },
+        error.UnsupportedBuiltinFunction,
+        error.UnsupportedOperation,
+        error.InvalidPattern,
+        error.InvalidIntParse,
+        error.BindElseDidNotExit,
+        error.NoSuchFunction,
+        error.NoSuchModule,
+        error.MissingReturn,
+        => |runtime_err| return .{
+            .module_path = test_case.module_path,
+            .file_path = test_case.file_path,
+            .name = test_case.name,
+            .status = .failed,
+            .message = @errorName(runtime_err),
+        },
+        else => |fatal| return fatal,
+    };
+
+    return .{
+        .module_path = test_case.module_path,
+        .file_path = test_case.file_path,
+        .name = test_case.name,
+        .status = .passed,
+    };
+}
+
 pub fn runFunction(
     program: *const Program,
     writer: *Io.Writer,
@@ -184,6 +287,7 @@ const Executor = struct {
     program: *const Program,
     writer: *Io.Writer,
     const_cache: std.ArrayList(ConstCacheEntry) = .empty,
+    last_assertion_message: ?[]const u8 = null,
 
     fn runFunction(self: *Executor, module_index: usize, function_name: []const u8, args: []const Binding) ExecutionError!Value {
         const function_decl = self.findFunctionDecl(module_index, function_name) orelse return error.NoSuchFunction;
@@ -203,6 +307,16 @@ const Executor = struct {
             return returned;
         }
         return error.MissingReturn;
+    }
+
+    fn runTest(self: *Executor, module_index: usize, test_decl: tree.TestDecl) ExecutionError!void {
+        var context = CallContext{
+            .exec = self,
+            .module_index = module_index,
+        };
+        try context.pushScope();
+        defer context.popScope();
+        _ = try context.evalBlock(test_decl.body, false);
     }
 
     fn currentDocument(self: *Executor, module_index: usize) tree.Document {
@@ -282,6 +396,40 @@ const Executor = struct {
         if (std.mem.eql(u8, module_path, "std/int") and std.mem.eql(u8, name, "to_string")) {
             const value = expectIntValue((findBinding(args, "value") orelse return error.UnsupportedBuiltinFunction).value);
             return .{ .string = try std.fmt.allocPrint(self.program.allocator, "{d}", .{value}) };
+        }
+
+        if (std.mem.eql(u8, module_path, "std/assert") and std.mem.eql(u8, name, "equal")) {
+            const left = (findBinding(args, "left") orelse return error.UnsupportedBuiltinFunction).value;
+            const right = (findBinding(args, "right") orelse return error.UnsupportedBuiltinFunction).value;
+            if (!valueEql(left, right)) {
+                self.last_assertion_message = "assert.equal failed";
+                return error.AssertionFailed;
+            }
+            return .void;
+        }
+
+        if (std.mem.eql(u8, module_path, "std/assert") and std.mem.eql(u8, name, "true")) {
+            const value = (findBinding(args, "value") orelse return error.UnsupportedBuiltinFunction).value;
+            if (!expectBool(value)) {
+                self.last_assertion_message = "assert.true failed";
+                return error.AssertionFailed;
+            }
+            return .void;
+        }
+
+        if (std.mem.eql(u8, module_path, "std/assert") and std.mem.eql(u8, name, "false")) {
+            const value = (findBinding(args, "value") orelse return error.UnsupportedBuiltinFunction).value;
+            if (expectBool(value)) {
+                self.last_assertion_message = "assert.false failed";
+                return error.AssertionFailed;
+            }
+            return .void;
+        }
+
+        if (std.mem.eql(u8, module_path, "std/assert") and std.mem.eql(u8, name, "fail")) {
+            const message = expectStringValue((findBinding(args, "message") orelse return error.UnsupportedBuiltinFunction).value);
+            self.last_assertion_message = message;
+            return error.AssertionFailed;
         }
 
         return error.UnsupportedBuiltinFunction;
@@ -1037,12 +1185,27 @@ fn decodeStringLiteral(allocator: std.mem.Allocator, raw: []const u8) ExecutionE
     return try out.toOwnedSlice();
 }
 
+fn testMatchesTarget(module: ModuleInfo, file_path: []const u8, target: ?[]const u8) bool {
+    const value = target orelse return true;
+    if (std.mem.endsWith(u8, value, ".lace")) {
+        return std.mem.eql(u8, file_path, value);
+    }
+    if (std.mem.eql(u8, module.path, value) or std.mem.startsWith(u8, module.path, value)) {
+        return true;
+    }
+    for (module.imports) |import_info| {
+        if (std.mem.eql(u8, import_info.module_path, value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 test "interpreter runs a bind-based spec program end to end" {
     var sources: source.Manager = .{};
     defer sources.deinit(std.testing.allocator);
 
     var diagnostics: diag.Store = .{};
-    defer diagnostics.deinit(std.testing.allocator);
 
     const program_source =
         "module main;\n\n" ++
@@ -1092,7 +1255,6 @@ test "interpreter runs an imported module and stdlib call" {
     defer sources.deinit(std.testing.allocator);
 
     var diagnostics: diag.Store = .{};
-    defer diagnostics.deinit(std.testing.allocator);
 
     const user_id = try sources.addSource(std.testing.allocator, "src/app/user.lace",
         "module app/user;\n\n" ++
@@ -1140,7 +1302,6 @@ test "interpreter fails clearly on unsupported stdlib functions" {
     defer sources.deinit(std.testing.allocator);
 
     var diagnostics: diag.Store = .{};
-    defer diagnostics.deinit(std.testing.allocator);
 
     const file_id = try sources.addSource(std.testing.allocator, "src/main.lace",
         "module main;\n\n" ++
@@ -1159,4 +1320,51 @@ test "interpreter fails clearly on unsupported stdlib functions" {
     defer output.deinit();
 
     try std.testing.expectError(error.UnsupportedBuiltinFunction, runMain(&program, &output.writer));
+}
+
+test "discoverTests finds sorted test cases in _test files" {
+    var sources: source.Manager = .{};
+    defer sources.deinit(std.testing.allocator);
+
+    var diagnostics: diag.Store = .{};
+
+    const file_a = try sources.addSource(std.testing.allocator, "src/feature_test.lace",
+        "module feature_test;\n\ntest \"b\" {\n    return Void;\n}\n\ntest \"a\" {\n    return Void;\n}\n");
+    const file_b = try sources.addSource(std.testing.allocator, "tests/integration_test.lace",
+        "module integration_test;\n\nimport feature_test;\n\ntest \"integration\" {\n    return Void;\n}\n");
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const doc_a = try @import("../syntax/mod.zig").parseFile(arena, &diagnostics, sources.getFile(file_a));
+    const doc_b = try @import("../syntax/mod.zig").parseFile(arena, &diagnostics, sources.getFile(file_b));
+    var program = try prepareProgram(arena, &diagnostics, &sources, &.{ doc_a, doc_b });
+
+    const tests = try discoverTests(arena, &program, null);
+    try std.testing.expectEqual(@as(usize, 3), tests.len);
+    try std.testing.expectEqualStrings("a", tests[0].name);
+    try std.testing.expectEqualStrings("b", tests[1].name);
+    try std.testing.expectEqualStrings("integration", tests[2].name);
+}
+
+test "runTestCase reports assertion failures" {
+    var sources: source.Manager = .{};
+    defer sources.deinit(std.testing.allocator);
+
+    var diagnostics: diag.Store = .{};
+
+    const file_id = try sources.addSource(std.testing.allocator, "tests/assert_test.lace",
+        "module assert_test;\n\nimport std/assert;\n\ntest \"fails\" {\n    assert.equal(left: 1, right: 2);\n}\n");
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const document = try @import("../syntax/mod.zig").parseFile(arena, &diagnostics, sources.getFile(file_id));
+    var program = try prepareProgram(arena, &diagnostics, &sources, &.{document});
+    const tests = try discoverTests(arena, &program, null);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    const result = try runTestCase(&program, &output.writer, tests[0]);
+    try std.testing.expectEqual(TestStatus.failed, result.status);
+    try std.testing.expectEqualStrings("assert.equal failed", result.message.?);
 }

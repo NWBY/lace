@@ -78,6 +78,11 @@ pub const RunOptions = struct {
     forwarded_args: []const []const u8 = &.{},
 };
 
+pub const TestOptions = struct {
+    target: ?[]const u8 = null,
+    json: bool = false,
+};
+
 pub const TypesOptions = struct {
     path: ?[]const u8 = null,
     json: bool = false,
@@ -146,6 +151,10 @@ pub const RunOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
 };
+pub const TestOptionsError = error{
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const TypesOptionsError = error{
     MissingJsonFlag,
     UnexpectedArgument,
@@ -196,7 +205,7 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace types --json`, `lace ast --json <file>`, `lace build`, `lace run`, `lace diag --json`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace test`, `lace types --json`, `lace ast --json <file>`, `lace build`, `lace run`, `lace diag --json`, and `lace --help`.\n");
 }
 
 pub fn parseInitOptions(args: []const []const u8) InitOptionsError!InitOptions {
@@ -310,6 +319,25 @@ pub fn parseRunOptions(args: []const []const u8) RunOptionsError!RunOptions {
         return error.UnexpectedArgument;
     }
     options.forwarded_args = if (forwarded_start) |start| args[start..] else &.{};
+    return options;
+}
+
+pub fn parseTestOptions(args: []const []const u8) TestOptionsError!TestOptions {
+    var options: TestOptions = .{};
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) {
+            options.json = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) {
+            return error.UnsupportedFlag;
+        }
+        if (options.target == null) {
+            options.target = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
     return options;
 }
 
@@ -441,6 +469,7 @@ test "help output lists check command" {
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace types") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace build") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace run") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "lace test") != null);
 }
 
 test "parse init options supports name and lib" {
@@ -498,6 +527,19 @@ test "parse run options supports forwarded args" {
     const default_options = try parseRunOptions(&.{"--"});
     try std.testing.expectEqual(@as(?[]const u8, null), default_options.path);
     try std.testing.expectEqual(@as(usize, 0), default_options.forwarded_args.len);
+}
+
+test "parse test options allows json and optional target" {
+    const options = try parseTestOptions(&.{ "--json", "app/signup" });
+    try std.testing.expect(options.json);
+    try std.testing.expectEqualStrings("app/signup", options.target.?);
+
+    const default_options = try parseTestOptions(&.{});
+    try std.testing.expectEqual(@as(?[]const u8, null), default_options.target);
+    try std.testing.expect(!default_options.json);
+
+    try std.testing.expectError(error.UnexpectedArgument, parseTestOptions(&.{ "a", "b" }));
+    try std.testing.expectError(error.UnsupportedFlag, parseTestOptions(&.{"--bad"}));
 }
 
 test "parse types options requires json and allows an optional path" {

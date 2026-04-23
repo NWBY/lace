@@ -120,9 +120,19 @@ fn expectedModulePath(file_path: []const u8) ?[]const u8 {
         return file_path[4 .. file_path.len - 5];
     }
 
-    const marker = "/src/";
-    const start = std.mem.lastIndexOf(u8, file_path, marker) orelse return null;
-    return file_path[start + marker.len .. file_path.len - 5];
+    if (std.mem.startsWith(u8, file_path, "tests/")) {
+        return file_path[6 .. file_path.len - 5];
+    }
+
+    if (std.mem.lastIndexOf(u8, file_path, "/src/")) |start| {
+        return file_path[start + 5 .. file_path.len - 5];
+    }
+
+    if (std.mem.lastIndexOf(u8, file_path, "/tests/")) |start| {
+        return file_path[start + 7 .. file_path.len - 5];
+    }
+
+    return null;
 }
 
 test "validation accepts a valid multi-file package" {
@@ -206,7 +216,7 @@ test "validation rejects duplicate module paths across files" {
 
 test "validation rejects files outside src" {
     try expectValidationCodes(&.{
-        .{ .path = "tests/signup_test.lace", .contents =
+        .{ .path = "fixtures/signup_test.lace", .contents =
             \\module app/signup_test;
             \\
             \\test "ok" {

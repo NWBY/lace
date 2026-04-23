@@ -1,0 +1,9 @@
+module main;
+
+pub error AppError {
+    placeholder,
+}
+
+fn main() -> Result<Void, AppError> {
+    return Ok(Void);
+}

@@ -66,6 +66,7 @@ pub const Context = struct {
             .check => return self.executeCheckCommand(stdout, stderr, command.args),
             .build => return self.executeBuildCommand(stdout, stderr, command.args),
             .run => return self.executeRunCommand(stdout, stderr, command.args),
+            .@"test" => return self.executeTestCommand(stdout, stderr, command.args),
             .types => return self.executeTypesCommand(stdout, stderr, command.args),
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             .diag => return self.executeDiagCommand(stdout, stderr, command.args),
@@ -365,6 +366,83 @@ pub const Context = struct {
         };
     }
 
+    fn executeTestCommand(
+        self: *Context,
+        stdout: *Io.Writer,
+        stderr: *Io.Writer,
+        args: []const []const u8,
+    ) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseTestOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace test [--json] [target]\n");
+            switch (err) {
+                error.UnexpectedArgument => try stderr.writeAll("`lace test` accepts at most one target.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace test` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace test` requires process I/O.\n");
+            return 1;
+        };
+
+        const selection = try self.resolveTestSelection(arena, io, options.target);
+        var diagnostics: diag.Store = .{};
+        const loaded = self.loadTestDocuments(arena, &diagnostics, selection.package_root) catch |err| switch (err) {
+            error.IoUnavailable => {
+                try stderr.writeAll("`lace test` requires process I/O for package traversal.\n");
+                return 1;
+            },
+            error.NoSourceFiles => {
+                try stderr.writeAll("No Lace source files were found.\n");
+                return 1;
+            },
+            else => {
+                try stderr.print("Failed to load sources: {t}\n", .{err});
+                return 1;
+            },
+        };
+
+        var program = backend.prepareProgram(arena, &diagnostics, &self.files, loaded.documents) catch |err| switch (err) {
+            error.DiagnosticsPresent => null,
+            else => return err,
+        };
+        if (diagnostics.count() != 0 or program == null) {
+            if (options.json) {
+                try self.renderDiagJson(stdout, &diagnostics);
+                try stdout.writeByte('\n');
+            } else {
+                try self.renderDiagnostics(stderr, &diagnostics);
+            }
+            return 1;
+        }
+
+        const test_cases = try backend.discoverTests(arena, &program.?, selection.filter);
+        const results = try arena.alloc(backend.TestResult, test_cases.len);
+        var passed: usize = 0;
+        var failed: usize = 0;
+        for (test_cases, 0..) |test_case, index| {
+            results[index] = try backend.runTestCase(&program.?, stdout, test_case);
+            switch (results[index].status) {
+                .passed => passed += 1,
+                .failed => failed += 1,
+            }
+        }
+
+        if (options.json) {
+            try self.renderTestJson(stdout, results, passed, failed);
+            try stdout.writeByte('\n');
+        } else {
+            try self.renderTestText(stdout, results, passed, failed);
+        }
+
+        return if (failed == 0) 0 else 1;
+    }
+
     fn executeTypesCommand(
         self: *Context,
         stdout: *Io.Writer,
@@ -661,6 +739,64 @@ pub const Context = struct {
         try json.endArray();
     }
 
+    fn renderTestJson(
+        self: *Context,
+        stdout: *Io.Writer,
+        results: []const backend.TestResult,
+        passed: usize,
+        failed: usize,
+    ) !void {
+        _ = self;
+        var json: std.json.Stringify = .{ .writer = stdout, .options = .{} };
+        try json.beginObject();
+        try json.objectField("status");
+        try json.write(if (failed == 0) "ok" else "error");
+        try json.objectField("summary");
+        try json.beginObject();
+        try json.objectField("total");
+        try json.write(results.len);
+        try json.objectField("passed");
+        try json.write(passed);
+        try json.objectField("failed");
+        try json.write(failed);
+        try json.endObject();
+        try json.objectField("tests");
+        try json.beginArray();
+        for (results) |result| {
+            try json.beginObject();
+            try json.objectField("module");
+            try json.write(result.module_path);
+            try json.objectField("file");
+            try json.write(result.file_path);
+            try json.objectField("name");
+            try json.write(result.name);
+            try json.objectField("status");
+            try json.write(if (result.status == .passed) "passed" else "failed");
+            try json.objectField("message");
+            try json.write(result.message);
+            try json.endObject();
+        }
+        try json.endArray();
+        try json.endObject();
+    }
+
+    fn renderTestText(
+        self: *Context,
+        stdout: *Io.Writer,
+        results: []const backend.TestResult,
+        passed: usize,
+        failed: usize,
+    ) !void {
+        _ = self;
+        for (results) |result| {
+            switch (result.status) {
+                .passed => try stdout.print("PASS {s} :: {s}\n", .{ result.module_path, result.name }),
+                .failed => try stdout.print("FAIL {s} :: {s} ({s})\n", .{ result.module_path, result.name, result.message orelse "failed" }),
+            }
+        }
+        try stdout.print("\n{d} passed; {d} failed; {d} total\n", .{ passed, failed, results.len });
+    }
+
     fn loadDocuments(
         self: *Context,
         arena: std.mem.Allocator,
@@ -719,6 +855,32 @@ pub const Context = struct {
         };
     }
 
+    fn loadTestDocuments(self: *Context, arena: std.mem.Allocator, diagnostics: *diag.Store, package_root: []const u8) !LoadedDocuments {
+        const workspace = try self.loadDocuments(arena, diagnostics, .{ .package = .{ .root = package_root } }, true);
+        const io = self.io orelse return error.IoUnavailable;
+        const test_paths = try pkg.collectTestSourceFiles(arena, io, package_root);
+
+        var all_paths = std.ArrayList([]const u8).empty;
+        try all_paths.appendSlice(arena, workspace.paths);
+        var documents = std.ArrayList(syntax.Tree.Document).empty;
+        try documents.appendSlice(arena, workspace.documents);
+
+        for (test_paths) |path| {
+            const file_id = try self.loadFile(path);
+            const document = syntax.parseFile(arena, diagnostics, self.sourceFile(file_id)) catch |err| switch (err) {
+                error.InvalidSyntax => continue,
+                error.OutOfMemory => return err,
+            };
+            try all_paths.append(arena, path);
+            try documents.append(arena, document);
+        }
+
+        return .{
+            .paths = try all_paths.toOwnedSlice(arena),
+            .documents = try documents.toOwnedSlice(arena),
+        };
+    }
+
     fn resolvePackageRoot(self: *const Context, allocator: std.mem.Allocator, io: Io, path: ?[]const u8) ![]const u8 {
         if (path) |value| {
             if (std.mem.endsWith(u8, value, ".lace")) {
@@ -727,6 +889,32 @@ pub const Context = struct {
             return allocator.dupe(u8, value);
         }
         return allocator.dupe(u8, ".");
+    }
+
+    fn resolveTestSelection(self: *const Context, allocator: std.mem.Allocator, io: Io, target: ?[]const u8) !TestSelection {
+        if (target) |value| {
+            if (std.mem.endsWith(u8, value, ".lace")) {
+                const package_root = try self.findPackageRootForFile(allocator, io, value) orelse return error.FileNotFound;
+                return .{
+                    .package_root = package_root,
+                    .filter = value,
+                };
+            }
+
+            if (try hasManifestAtPath(allocator, io, value)) {
+                return .{
+                    .package_root = allocator.dupe(u8, value) catch return error.OutOfMemory,
+                    .filter = null,
+                };
+            }
+
+            return .{
+                .package_root = allocator.dupe(u8, ".") catch return error.OutOfMemory,
+                .filter = value,
+            };
+        }
+
+        return .{ .package_root = allocator.dupe(u8, ".") catch return error.OutOfMemory, .filter = null };
     }
 
     fn resolveEntry(
@@ -895,6 +1083,11 @@ const EntryTarget = struct {
     module_path: []const u8,
 };
 
+const TestSelection = struct {
+    package_root: []const u8,
+    filter: ?[]const u8,
+};
+
 const LoadedDocuments = struct {
     paths: []const []const u8,
     documents: []const syntax.Tree.Document,
@@ -909,6 +1102,20 @@ fn sourceTargetFromPath(path: ?[]const u8) pkg.SourceTarget {
     }
 
     return .{ .package = .{} };
+}
+
+fn hasManifestAtPath(allocator: std.mem.Allocator, io: Io, root: []const u8) !bool {
+    const manifest_path = try std.fs.path.join(allocator, &.{ root, "lace.toml" });
+    defer allocator.free(manifest_path);
+    var file = std.Io.Dir.cwd().openFile(io, manifest_path, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => null,
+        else => return err,
+    };
+    if (file) |*opened| {
+        opened.close(io);
+        return true;
+    }
+    return false;
 }
 
 test "context stores diagnostics" {
@@ -1061,6 +1268,82 @@ test "context executes fetch for a package root" {
     const lock_text = try tmp.dir.readFileAlloc(std.testing.io, "app/lace.lock", std.testing.allocator, .unlimited);
     defer std.testing.allocator.free(lock_text);
     try std.testing.expect(std.mem.indexOf(u8, lock_text, "github.com/sam/user") != null);
+}
+
+test "context executes test json for a package root" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "pkg/src");
+    try tmp.dir.createDirPath(std.testing.io, "pkg/tests");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/test-demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/main.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/main.lace", .data =
+        "module main;\n\npub error AppError {\n    placeholder,\n}\n\nfn main() -> Result<Void, AppError> {\n    return Ok(Void);\n}\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/tests/main_test.lace", .data =
+        "module main_test;\n\nimport std/assert;\n\ntest \"passes\" {\n    assert.true(value: true);\n}\n\ntest \"fails\" {\n    assert.equal(left: 1, right: 2);\n}\n" });
+
+    const package_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
+    defer std.testing.allocator.free(package_root);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .@"test", .args = &.{ "--json", package_root } },
+    );
+
+    try std.testing.expectEqual(@as(u8, 1), exit_code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"status\":\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"total\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"passed\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"failed\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"name\":\"fails\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"message\":\"assert.equal failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout.written(), "\"name\":\"passes\"") != null);
+}
+
+test "context executes focused test text output for a test file" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(std.testing.io, "pkg/src");
+    try tmp.dir.createDirPath(std.testing.io, "pkg/tests");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/lace.toml", .data =
+        "[package]\nname = \"github.com/sam/test-demo\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n\n[build]\nsrc = \"src\"\nentry = \"src/main.lace\"\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/src/main.lace", .data =
+        "module main;\n\npub error AppError {\n    placeholder,\n}\n\nfn main() -> Result<Void, AppError> {\n    return Ok(Void);\n}\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "pkg/tests/main_test.lace", .data =
+        "module main_test;\n\nimport std/assert;\n\ntest \"only\" {\n    assert.true(value: true);\n}\n" });
+
+    const package_root = try std.fs.path.join(std.testing.allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pkg" });
+    defer std.testing.allocator.free(package_root);
+    const test_file = try std.fs.path.join(std.testing.allocator, &.{ package_root, "tests", "main_test.lace" });
+    defer std.testing.allocator.free(test_file);
+
+    var stdout = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stdout.deinit();
+    var stderr = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer stderr.deinit();
+    var context = Context.init(std.testing.allocator, std.testing.io);
+    defer context.deinit();
+
+    const exit_code = try context.execute(
+        &stdout.writer,
+        &stderr.writer,
+        .{ .kind = .@"test", .args = &.{test_file} },
+    );
+
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+    try std.testing.expectEqualStrings("", stderr.written());
+    try std.testing.expectEqualStrings("PASS main_test :: only\n\n1 passed; 0 failed; 1 total\n", stdout.written());
 }
 
 test "context executes build json for a package root" {

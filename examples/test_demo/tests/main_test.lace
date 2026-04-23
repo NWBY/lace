@@ -1,0 +1,11 @@
+module main_test;
+
+import std/assert;
+
+test "passes" {
+    assert.true(value: true);
+}
+
+test "fails" {
+    assert.equal(left: 1, right: 2);
+}
