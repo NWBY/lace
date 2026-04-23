@@ -10,17 +10,21 @@ pub const Lockfile = @import("manifest.zig").Lockfile;
 pub const Manifest = @import("manifest.zig").Manifest;
 pub const NewPackageOptions = @import("scaffold.zig").NewPackageOptions;
 pub const ScaffoldOptions = @import("scaffold.zig").ScaffoldOptions;
+pub const addDependency = @import("edit.zig").addDependency;
+pub const cleanBuildArtifacts = @import("edit.zig").cleanBuildArtifacts;
 pub const collectTestSourceFiles = @import("testsources.zig").collectTestSourceFiles;
 pub const collectWorkspaceSourceFiles = @import("deps.zig").collectWorkspaceSourceFiles;
 pub const collectWorkspaceSources = @import("deps.zig").collectWorkspaceSources;
 pub const defaultDependencyRoots = @import("deps.zig").defaultDependencyRoots;
 pub const fetchDependencies = @import("deps.zig").fetchDependencies;
 pub const initPackage = @import("scaffold.zig").initPackage;
+pub const removeDependency = @import("edit.zig").removeDependency;
 pub const newPackage = @import("scaffold.zig").newPackage;
 pub const parseLockfile = @import("manifest.zig").parseLockfile;
 pub const parseManifest = @import("manifest.zig").parseManifest;
 pub const renderLockfileAlloc = @import("manifest.zig").renderLockfileAlloc;
 pub const renderManifestAlloc = @import("manifest.zig").renderManifestAlloc;
+pub const updateDependencies = @import("edit.zig").updateDependencies;
 
 pub const SourceTarget = union(enum) {
     single_file: []const u8,
@@ -101,6 +105,7 @@ test "package loader finds lace files recursively" {
 }
 
 test {
+    _ = @import("edit.zig");
     _ = @import("deps.zig");
     _ = @import("manifest.zig");
     _ = @import("scaffold.zig");

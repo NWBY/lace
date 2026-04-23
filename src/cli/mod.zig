@@ -62,6 +62,24 @@ pub const NewOptions = struct {
     lib: bool = false,
 };
 
+pub const AddOptions = struct {
+    spec: []const u8,
+    path: ?[]const u8 = null,
+};
+
+pub const RemoveOptions = struct {
+    name: []const u8,
+    path: ?[]const u8 = null,
+};
+
+pub const UpdateOptions = struct {
+    path: ?[]const u8 = null,
+};
+
+pub const CleanOptions = struct {
+    path: ?[]const u8 = null,
+};
+
 pub const FetchOptions = struct {
     path: ?[]const u8 = null,
 };
@@ -138,6 +156,20 @@ pub const NewOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
 };
+pub const AddOptionsError = error{
+    MissingSpec,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
+pub const RemoveOptionsError = error{
+    MissingName,
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
+pub const SimplePathOptionsError = error{
+    UnexpectedArgument,
+    UnsupportedFlag,
+};
 pub const FetchOptionsError = error{
     UnexpectedArgument,
     UnsupportedFlag,
@@ -205,7 +237,7 @@ pub fn writeHelp(writer: *Io.Writer) !void {
     }
 
     try writer.writeAll("\n");
-    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace fetch`, `lace fmt`, `lace check`, `lace test`, `lace types --json`, `lace ast --json <file>`, `lace build`, `lace run`, `lace diag --json`, and `lace --help`.\n");
+    try writer.writeAll("Implemented so far: `lace init`, `lace new`, `lace add`, `lace remove`, `lace update`, `lace clean`, `lace fetch`, `lace fmt`, `lace check`, `lace test`, `lace types --json`, `lace ast --json <file>`, `lace build`, `lace run`, `lace diag --json`, and `lace --help`.\n");
 }
 
 pub fn parseInitOptions(args: []const []const u8) InitOptionsError!InitOptions {
@@ -253,6 +285,50 @@ pub fn parseNewOptions(args: []const []const u8) NewOptionsError!NewOptions {
         .name = name orelse return error.MissingName,
         .lib = lib,
     };
+}
+
+pub fn parseAddOptions(args: []const []const u8) AddOptionsError!AddOptions {
+    var spec: ?[]const u8 = null;
+    var path: ?[]const u8 = null;
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--")) return error.UnsupportedFlag;
+        if (spec == null) {
+            spec = arg;
+            continue;
+        }
+        if (path == null) {
+            path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    return .{ .spec = spec orelse return error.MissingSpec, .path = path };
+}
+
+pub fn parseRemoveOptions(args: []const []const u8) RemoveOptionsError!RemoveOptions {
+    var name: ?[]const u8 = null;
+    var path: ?[]const u8 = null;
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--")) return error.UnsupportedFlag;
+        if (name == null) {
+            name = arg;
+            continue;
+        }
+        if (path == null) {
+            path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    return .{ .name = name orelse return error.MissingName, .path = path };
+}
+
+pub fn parseUpdateOptions(args: []const []const u8) SimplePathOptionsError!UpdateOptions {
+    return .{ .path = try parseOptionalPathArg(args) };
+}
+
+pub fn parseCleanOptions(args: []const []const u8) SimplePathOptionsError!CleanOptions {
+    return .{ .path = try parseOptionalPathArg(args) };
 }
 
 pub fn parseFetchOptions(args: []const []const u8) FetchOptionsError!FetchOptions {
@@ -339,6 +415,19 @@ pub fn parseTestOptions(args: []const []const u8) TestOptionsError!TestOptions {
         return error.UnexpectedArgument;
     }
     return options;
+}
+
+fn parseOptionalPathArg(args: []const []const u8) SimplePathOptionsError!?[]const u8 {
+    var path: ?[]const u8 = null;
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "--")) return error.UnsupportedFlag;
+        if (path == null) {
+            path = arg;
+            continue;
+        }
+        return error.UnexpectedArgument;
+    }
+    return path;
 }
 
 pub fn parseTypesOptions(args: []const []const u8) TypesOptionsError!TypesOptions {
@@ -493,6 +582,34 @@ test "parse new options requires a package name" {
     try std.testing.expectError(error.MissingName, parseNewOptions(&.{}));
     try std.testing.expectError(error.UnexpectedArgument, parseNewOptions(&.{ "a", "b" }));
     try std.testing.expectError(error.UnsupportedFlag, parseNewOptions(&.{"--bad"}));
+}
+
+test "parse add options supports spec and optional path" {
+    const options = try parseAddOptions(&.{ "github.com/sam/store@0.4.0", "examples/app" });
+    try std.testing.expectEqualStrings("github.com/sam/store@0.4.0", options.spec);
+    try std.testing.expectEqualStrings("examples/app", options.path.?);
+
+    try std.testing.expectError(error.MissingSpec, parseAddOptions(&.{}));
+    try std.testing.expectError(error.UnexpectedArgument, parseAddOptions(&.{ "a", "b", "c" }));
+}
+
+test "parse remove options supports name and optional path" {
+    const options = try parseRemoveOptions(&.{ "github.com/sam/store", "examples/app" });
+    try std.testing.expectEqualStrings("github.com/sam/store", options.name);
+    try std.testing.expectEqualStrings("examples/app", options.path.?);
+
+    try std.testing.expectError(error.MissingName, parseRemoveOptions(&.{}));
+    try std.testing.expectError(error.UnexpectedArgument, parseRemoveOptions(&.{ "a", "b", "c" }));
+}
+
+test "parse update and clean options allow optional path" {
+    const update_options = try parseUpdateOptions(&.{"examples/app"});
+    try std.testing.expectEqualStrings("examples/app", update_options.path.?);
+    const clean_options = try parseCleanOptions(&.{});
+    try std.testing.expectEqual(@as(?[]const u8, null), clean_options.path);
+
+    try std.testing.expectError(error.UnexpectedArgument, parseUpdateOptions(&.{ "a", "b" }));
+    try std.testing.expectError(error.UnsupportedFlag, parseCleanOptions(&.{"--bad"}));
 }
 
 test "parse fetch options allows package default and one path" {

@@ -71,6 +71,10 @@ pub const Context = struct {
             .ast => return self.executeAstCommand(stdout, stderr, command.args),
             .diag => return self.executeDiagCommand(stdout, stderr, command.args),
             .fetch => return self.executeFetchCommand(stderr, command.args),
+            .add => return self.executeAddCommand(stderr, command.args),
+            .remove => return self.executeRemoveCommand(stderr, command.args),
+            .update => return self.executeUpdateCommand(stderr, command.args),
+            .clean => return self.executeCleanCommand(stderr, command.args),
             .new => return self.executeNewCommand(stderr, command.args),
             else => {
                 _ = command.args;
@@ -636,6 +640,154 @@ pub const Context = struct {
             return 1;
         }
 
+        return 0;
+    }
+
+    fn executeAddCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseAddOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace add <package@version> [path]\n");
+            switch (err) {
+                error.MissingSpec => try stderr.writeAll("`lace add` requires a dependency spec like `foo/bar@1.2.3`.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace add` accepts a dependency spec and at most one package path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace add` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace add` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        const roots = try self.dependencyRoots(arena);
+        var diagnostics: diag.Store = .{};
+        const ok = pkg.addDependency(arena, &diagnostics, io, package_root, options.spec, roots) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace add` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            error.InvalidDependencySpec => {
+                try stderr.writeAll("Dependency specs must look like `package/name@1.2.3`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+
+        if (diagnostics.count() != 0) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        return if (ok) 0 else 1;
+    }
+
+    fn executeRemoveCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseRemoveOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace remove <package> [path]\n");
+            switch (err) {
+                error.MissingName => try stderr.writeAll("`lace remove` requires a dependency name.\n"),
+                error.UnexpectedArgument => try stderr.writeAll("`lace remove` accepts a dependency name and at most one package path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace remove` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace remove` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        const roots = try self.dependencyRoots(arena);
+        var diagnostics: diag.Store = .{};
+        const changed = pkg.removeDependency(arena, &diagnostics, io, package_root, options.name, roots) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace remove` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+
+        if (diagnostics.count() != 0) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        _ = changed;
+        return 0;
+    }
+
+    fn executeUpdateCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseUpdateOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace update [path]\n");
+            switch (err) {
+                error.UnexpectedArgument => try stderr.writeAll("`lace update` accepts at most one package path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace update` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace update` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        const roots = try self.dependencyRoots(arena);
+        var diagnostics: diag.Store = .{};
+        const ok = pkg.updateDependencies(arena, &diagnostics, io, package_root, roots) catch |err| switch (err) {
+            error.FileNotFound => {
+                try stderr.writeAll("`lace update` requires a package with `lace.toml`.\n");
+                return 1;
+            },
+            else => return err,
+        };
+
+        if (diagnostics.count() != 0) {
+            try self.renderDiagnostics(stderr, &diagnostics);
+            return 1;
+        }
+
+        return if (ok) 0 else 1;
+    }
+
+    fn executeCleanCommand(self: *Context, stderr: *Io.Writer, args: []const []const u8) !u8 {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const options = cli.parseCleanOptions(args) catch |err| {
+            try stderr.writeAll("Usage: lace clean [path]\n");
+            switch (err) {
+                error.UnexpectedArgument => try stderr.writeAll("`lace clean` accepts at most one package path.\n"),
+                error.UnsupportedFlag => try stderr.writeAll("Unsupported `lace clean` flag.\n"),
+            }
+            return 1;
+        };
+
+        const io = self.io orelse {
+            try stderr.writeAll("`lace clean` requires process I/O.\n");
+            return 1;
+        };
+
+        const package_root = try self.resolvePackageRoot(arena, io, options.path);
+        _ = pkg.cleanBuildArtifacts(io, package_root) catch |err| switch (err) {
+            error.FileNotFound => false,
+            else => return err,
+        };
         return 0;
     }
 
