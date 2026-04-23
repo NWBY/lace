@@ -1,3 +1,5 @@
+# COMPLETED
+
 # TODO 019: Test Discovery, Assertions, and Runner
 
 ## Goal

@@ -29,17 +29,19 @@ Implemented so far:
 - interpreter backend for the current Lace MVP subset
 - `lace build [--json] [path]`
 - `lace run [path] [-- args...]`
+- built-in test discovery and assertion runner
 - `lace fmt [path]`
 - `lace check [--json] [path]`
 - `lace diag [--json] [path]`
 - `lace fetch [path]`
+- `lace test [--json] [target]`
 - `lace types --json [path]`
 - `lace ast --json <file>`
 
 In progress next:
 
-- test runner integration
 - dependency editing commands
+- publish and registry workflow
 
 ## Goals
 
@@ -67,6 +69,7 @@ zig build run -- diag --json examples/check_demo
 zig build run -- types --json examples/check_demo
 zig build run -- build --json examples/check_demo
 zig build run -- run examples/check_demo -- one two
+zig build run -- test --json examples/test_demo
 zig build run -- ast --json examples/demo.lace
 ```
 
@@ -108,6 +111,13 @@ zig build run -- build --json examples/check_demo
 
 ```sh
 zig build run -- run examples/check_demo -- one two
+```
+
+### test
+
+```sh
+zig build run -- test examples/test_demo
+zig build run -- test --json examples/test_demo
 ```
 
 ### fmt
@@ -154,8 +164,8 @@ src/
   diag/           diagnostics model and renderers
   syntax/         lexer, parser, and AST JSON output
   sem/            semantic validation, typing, result semantics, and type manifests
-  pkg/            source discovery, manifests, scaffolding, and dependency fetch
-  backend/        interpreter backend for MVP execution
+  pkg/            source discovery, manifests, scaffolding, dependency fetch, and test loading
+  backend/        interpreter backend and test execution
   examples/         sample Lace source files
 todo/             ordered implementation roadmap
 ```
@@ -185,6 +195,7 @@ The current sequence starts with:
 16. types manifest json
 17. backend mvp execution model
 18. build and run commands
+19. built-in test runner
 
 ## Design Direction
 
